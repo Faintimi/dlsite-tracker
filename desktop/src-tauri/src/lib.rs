@@ -1,14 +1,115 @@
-// Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
+// 同人游戏雷达 · Doujin Game Radar —— 桌面端后端命令
+// 职责：数据文件选择 / 记住最近使用的 works.json / 为封面图片登记资产协议读取范围。
+// 数据只在本机流转：所有命令都只读本地文件，不做任何网络访问。
+
+use std::fs;
+use std::path::{Path, PathBuf};
+
+use serde::{Deserialize, Serialize};
+use tauri::{AppHandle, Manager};
+use tauri_plugin_dialog::DialogExt;
+
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+#[serde(default)]
+struct Settings {
+    /// 最近一次选择的 works.json 绝对路径
+    data_path: Option<String>,
+}
+
+fn settings_file(app: &AppHandle) -> Result<PathBuf, String> {
+    let dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
+    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    Ok(dir.join("settings.json"))
+}
+
+fn read_settings(app: &AppHandle) -> Settings {
+    settings_file(app)
+        .ok()
+        .and_then(|path| fs::read_to_string(path).ok())
+        .and_then(|raw| serde_json::from_str(&raw).ok())
+        .unwrap_or_default()
+}
+
+fn write_settings(app: &AppHandle, settings: &Settings) -> Result<(), String> {
+    let path = settings_file(app)?;
+    let raw = serde_json::to_string_pretty(settings).map_err(|e| e.to_string())?;
+    fs::write(path, raw).map_err(|e| e.to_string())
+}
+
+/// 为 works.json 所在目录登记资产协议读取范围（封面在 <目录>/covers 下）。
+/// 仅登记运行时范围：重启后由 `setup` 依据持久化设置重新登记。
+fn allow_data_dir(app: &AppHandle, data_path: &Path) -> Result<(), String> {
+    if let Some(dir) = data_path.parent() {
+        app.asset_protocol_scope()
+            .allow_directory(dir, true)
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+/// 返回最近使用的数据文件路径（未设置则为 null）。
 #[tauri::command]
-fn greet(name: &str) -> String {
-    format!("Hello, {}! You've been greeted from Rust!", name)
+fn get_data_path(app: AppHandle) -> Option<String> {
+    read_settings(&app).data_path
+}
+
+/// 打开文件选择框；选中后持久化并登记读取范围。
+#[tauri::command]
+async fn pick_data_file(app: AppHandle) -> Result<Option<String>, String> {
+    let current = read_settings(&app).data_path;
+    let mut dialog = app.dialog().file().add_filter("works.json", &["json"]);
+    if let Some(dir) = current.as_deref().and_then(|p| Path::new(p).parent()) {
+        dialog = dialog.set_directory(dir);
+    }
+    let Some(picked) = dialog.blocking_pick_file() else {
+        return Ok(None);
+    };
+    let path = picked.into_path().map_err(|e| e.to_string())?;
+    allow_data_dir(&app, &path)?;
+    write_settings(
+        &app,
+        &Settings { data_path: Some(path.to_string_lossy().into_owned()) },
+    )?;
+    Ok(Some(path.to_string_lossy().into_owned()))
+}
+
+/// 读取 works.json 原文；解析（JSON.parse）放在前端完成。
+#[tauri::command]
+fn load_works(app: AppHandle) -> Result<String, String> {
+    let path = read_settings(&app).data_path.ok_or("尚未选择数据文件")?;
+    match fs::read_to_string(&path) {
+        Ok(raw) => {
+            println!("[radar] 已读取数据文件：{path}（{} 字节）", raw.len());
+            Ok(raw)
+        }
+        Err(e) => {
+            let message = format!("读取 {path} 失败：{e}");
+            eprintln!("[radar] {message}");
+            Err(message)
+        }
+    }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![greet])
+        .plugin(tauri_plugin_dialog::init())
+        .setup(|app| {
+            match read_settings(app.handle()).data_path {
+                Some(path) => match allow_data_dir(app.handle(), Path::new(&path)) {
+                    Ok(()) => println!("[radar] 数据文件：{path}（已登记封面读取范围）"),
+                    Err(e) => eprintln!("[radar] 封面读取范围登记失败：{e}"),
+                },
+                None => println!("[radar] 尚未选择数据文件"),
+            }
+            Ok(())
+        })
+        .invoke_handler(tauri::generate_handler![
+            get_data_path,
+            pick_data_file,
+            load_works
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

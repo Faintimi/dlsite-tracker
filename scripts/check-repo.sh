@@ -19,12 +19,16 @@ else
 fi
 
 echo "== 2/4 追踪文件中是否有图片/二进制/压缩包 =="
-hits=$(git ls-files | grep -iE '\.(jpg|jpeg|png|gif|webp|bmp|ico|svg|pdf|zip|gz|tgz|tar|7z|rar|mp4|mov|webm|mp3|wav|flac|sqlite|db)$' || true)
+# 例外（应用必需的源资源，属正常入库内容）：
+#   desktop/src-tauri/icons/  桌面版打包图标（Tauri bundle 引用）
+#   desktop/static/           桌面版界面资源（favicon 与占位 logo）
+hits=$(git ls-files | grep -iE '\.(jpg|jpeg|png|gif|webp|bmp|ico|icns|svg|pdf|zip|gz|tgz|tar|7z|rar|mp4|mov|webm|mp3|wav|flac|sqlite|db)$' \
+  | grep -vE '^desktop/(src-tauri/icons|static)/' || true)
 if [ -n "$hits" ]; then
   echo "$hits" | head -20
   fail "发现图片/二进制/压缩包被追踪"
 else
-  echo "OK：无图片/二进制/压缩包"
+  echo "OK：无图片/二进制/压缩包（已排除桌面版应用资源白名单）"
 fi
 
 echo "== 3/4 追踪文件中是否有大文件（>200KB） =="

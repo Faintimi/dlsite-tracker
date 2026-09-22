@@ -1,0 +1,84 @@
+/* 全局样式：跟随系统浅色 / 深色主题 */
+:root {
+  color-scheme: light dark;
+  --bg: #f4f4f6;
+  --panel: #ffffff;
+  --text: #1b1b1f;
+  --muted: #6b6b74;
+  --border: #e2e2e8;
+  --accent: #d94f2b;
+  --codebg: #ececf1;
+  --coverbg: #e8e8ee;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #1b1b1f;
+    --panel: #24242a;
+    --text: #ececf1;
+    --muted: #9a9aa4;
+    --border: #37373f;
+    --accent: #ff7a59;
+    --codebg: #2e2e36;
+    --coverbg: #2a2a31;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+}
+
+body {
+  font-family:
+    -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans", "Noto Sans CJK SC",
+    "Microsoft YaHei", "Segoe UI", sans-serif;
+  font-size: 14px;
+  color: var(--text);
+  background: var(--bg);
+  /* 桌面应用：滚动交给页面内部的滚动容器 */
+  overflow: hidden;
+}
+
+.btn {
+  appearance: none;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 6px 12px;
+  font-size: 13px;
+  font-family: inherit;
+  cursor: pointer;
+  transition:
+    border-color 0.15s,
+    background 0.15s,
+    opacity 0.15s;
+}
+
+.btn:hover {
+  border-color: var(--accent);
+}
+
+.btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+  border-color: var(--border);
+}
+
+.btn.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+  font-weight: 600;
+}
+
+.btn.primary:hover {
+  filter: brightness(1.06);
+}
