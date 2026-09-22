@@ -1,0 +1,27 @@
+# 本地配置（含个人偏好，不入库）
+config.ini
+
+# 数据与产物（仅本机）
+data/
+out/
+
+# 应用构建产物
+app/dist/
+
+# 日志
+*.log
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+
+# 编辑器和系统
+.DS_Store
+.idea/
+.vscode/
+
+# 内部文档（仅本地：协作规范 / 设计文档 / 开发记录；不入库）
+/AGENTS.md
+/DEVELOPMENT.md
+/docs/

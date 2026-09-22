@@ -1,0 +1,8 @@
+# 同人游戏雷达 · Doujin Game Radar — 依赖声明 / Dependencies
+#
+# 本项目仅使用 Python 标准库（stdlib），零第三方依赖 /
+# Zero third-party dependencies — Python standard library only:
+#   pip install -r requirements.txt   # 无需安装任何包（声明用）/ nothing to install
+#
+# 环境要求 / Requirements: Python >= 3.9（macOS 自带 /usr/bin/python3 即可）
+# 运行 / Run: python3 -m dlsite_tracker --help
