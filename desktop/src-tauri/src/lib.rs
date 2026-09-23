@@ -48,10 +48,63 @@ fn allow_data_dir(app: &AppHandle, data_path: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// 返回最近使用的数据文件路径（未设置则为 null）。
+/// 自动发现 works.json：先沿可执行文件向上 10 级（开发 / 本地打包场景会直接命中仓库的
+/// out/works.json），再检查常见目录（code / Code / Projects / Documents / Desktop /
+/// 主目录，各扫一层子目录找 `<项目>/out/works.json`）。
+fn discover_data_file(app: &AppHandle) -> Option<PathBuf> {
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    if let Ok(exe) = std::env::current_exe() {
+        let mut dir = exe.parent().map(|path| path.to_path_buf());
+        for _ in 0..10 {
+            let Some(current) = dir else { break };
+            candidates.push(current.join("out").join("works.json"));
+            dir = current.parent().map(|path| path.to_path_buf());
+        }
+    }
+    if let Ok(home) = app.path().home_dir() {
+        let bases = [
+            home.join("code"),
+            home.join("Code"),
+            home.join("Projects"),
+            home.join("Documents"),
+            home.join("Desktop"),
+            home.clone(),
+        ];
+        for base in bases {
+            candidates.push(base.join("dlsite-tracker").join("out").join("works.json"));
+            if let Ok(entries) = fs::read_dir(&base) {
+                for entry in entries.flatten() {
+                    if entry.file_type().map(|kind| kind.is_dir()).unwrap_or(false) {
+                        candidates.push(entry.path().join("out").join("works.json"));
+                    }
+                }
+            }
+        }
+    }
+    candidates.into_iter().find(|path| path.is_file())
+}
+
+/// 返回最近使用的数据文件路径（未设置或已失效时尝试自动发现并绑定；都没有则为 null）。
 #[tauri::command]
 fn get_data_path(app: AppHandle) -> Option<String> {
-    read_settings(&app).data_path
+    if let Some(path) = read_settings(&app).data_path {
+        if Path::new(&path).is_file() {
+            return Some(path);
+        }
+    }
+    let discovered = discover_data_file(&app)?;
+    let path = discovered.to_string_lossy().into_owned();
+    if let Err(e) = allow_data_dir(&app, &discovered) {
+        eprintln!("[radar] 自动绑定封面读取范围失败：{e}");
+    }
+    if let Err(e) = write_settings(
+        &app,
+        &Settings { data_path: Some(path.clone()) },
+    ) {
+        eprintln!("[radar] 自动绑定保存设置失败：{e}");
+    }
+    println!("[radar] 自动绑定数据文件：{path}");
+    Some(path)
 }
 
 /// 打开文件选择框；选中后持久化并登记读取范围。

@@ -1113,9 +1113,9 @@
     {:else}
       <div class="center">
         <h1>同人游戏雷达 · Doujin Game Radar</h1>
-        <p>选择由数据管道导出的 <code>works.json</code> 开始浏览</p>
+        <p>未自动找到数据文件；请选择由数据管道导出的 <code>works.json</code></p>
         <p class="hint">
-          通常位于仓库的 <code>out/works.json</code>；封面在其旁边的 <code>covers/</code> 目录，数据全部留在本机
+          启动时会自动查找常见位置（本地仓库的 <code>out/works.json</code>）；封面在其旁边的 <code>covers/</code> 目录，数据全部留在本机
         </p>
         <button class="btn primary" onclick={pick}>选择数据文件</button>
       </div>
