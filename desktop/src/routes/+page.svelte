@@ -988,7 +988,7 @@
     {#if activeGenre}
       <div class="strip">
         <span class="strip-icon">{@html ICONS.chartBarFill}</span>
-        <span class="strip-title">分类人气：「{activeGenre.name}」按官方人气名次</span>
+        <span class="strip-title">分类人气榜：「{activeGenre.name}」按官方人气名次</span>
         <span class="spacer"></span>
         <button class="link" onclick={() => (filter.genreFocus = "")}>返回全部作品</button>
       </div>
@@ -1203,7 +1203,7 @@
 
 {#if genreImportRequest}
   <ConfirmDialog
-    title="导入分类人气"
+    title="导入分类人气榜"
     message={`「${genreImportRequest.name}」尚未导入人气数据。现在抓取并入库？（含榜上新作品，约 1–3 分钟；进度见顶部横幅）`}
     confirmLabel="开始导入（前 200 名）"
     danger={false}

@@ -7,12 +7,14 @@
     emptyLabel,
     options,
     selection,
+    hint = "",
     onchange,
   }: {
     title: string;
     emptyLabel: string;
     options: string[];
     selection: string[];
+    hint?: string;
     onchange: (next: string[]) => void;
   } = $props();
 
@@ -36,8 +38,10 @@
 <svelte:window onclick={onWindowClick} />
 
 <div class="setfilter" bind:this={container}>
-  <button class="trigger" onclick={() => (open = !open)}>
-    {selection.length === 0 ? `${title}：${emptyLabel}` : `${title}：已选 ${selection.length} 项`}
+  <button class="trigger" title={hint} onclick={() => (open = !open)}>
+    <span class="label">{title}</span>
+    <span class="value">{selection.length === 0 ? emptyLabel : `已选 ${selection.length} 项`}</span>
+    <span class="chev">{@html ICONS.chevronDown}</span>
   </button>
   {#if open}
     <div class="pop">
@@ -69,14 +73,37 @@
     color: var(--text);
     font: inherit;
     font-size: 12.5px;
-    border-radius: 7px;
-    padding: 5px 9px;
+    border-radius: 8px;
+    padding: 5px 8px;
     width: 100%;
-    text-align: left;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    cursor: default;
+  }
+
+  .trigger:hover {
+    border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+  }
+
+  .label {
+    color: var(--muted);
+    flex: none;
+  }
+
+  .value {
+    flex: 1;
+    min-width: 0;
+    text-align: right;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    cursor: default;
+  }
+
+  .chev {
+    display: inline-flex;
+    color: var(--muted);
+    flex: none;
   }
 
   .pop {

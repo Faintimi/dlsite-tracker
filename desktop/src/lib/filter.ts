@@ -157,8 +157,14 @@ function compare(a: WorkView, b: WorkView, sort: SortKey): number {
   switch (sort) {
     case "sales":
       return (b.sales ?? -1) - (a.sales ?? -1);
-    case "rating":
-      return (b.rating ?? -1) - (a.rating ?? -1);
+    case "rating": {
+      // 并列很多（当前库 ≈2605/8950 部为 5.0）：同分时评价人多者在前，再平比销量
+      const diff = (b.rating ?? -1) - (a.rating ?? -1);
+      if (diff !== 0) return diff;
+      const countDiff = (b.rating_count ?? -1) - (a.rating_count ?? -1);
+      if (countDiff !== 0) return countDiff;
+      return (b.sales ?? -1) - (a.sales ?? -1);
+    }
     case "priceLow":
       return (a.price ?? Number.POSITIVE_INFINITY) - (b.price ?? Number.POSITIVE_INFINITY);
     case "priceHigh":

@@ -265,13 +265,15 @@
 </script>
 
 <aside class="sidebar">
-  <section class="card">
+  <section class="card flat">
     <button
       class="section-head"
       title={prefs.data.sections.favorites ? "收起「收藏」" : "展开「收藏」"}
       onclick={() => prefs.toggleSection("favorites", !prefs.data.sections.favorites)}
     >
       <span class="chev" class:open={prefs.data.sections.favorites}>{@html ICONS.chevronRight}</span>
+      <span class="bar"></span>
+      <span class="sec-icon">{@html ICONS.folder}</span>
       <span class="title">收藏</span>
       <span class="spacer"></span>
       {#if !prefs.data.sections.favorites}
@@ -327,11 +329,13 @@
   <section class="card">
     <button
       class="section-head"
-      title={prefs.data.sections.genres ? "收起「分类人气」" : "展开「分类人气」"}
+      title={prefs.data.sections.genres ? "收起「分类人气榜」" : "展开「分类人气榜」"}
       onclick={() => prefs.toggleSection("genres", !prefs.data.sections.genres)}
     >
       <span class="chev" class:open={prefs.data.sections.genres}>{@html ICONS.chevronRight}</span>
-      <span class="title">分类人气</span>
+      <span class="bar"></span>
+      <span class="sec-icon">{@html ICONS.chartBarFill}</span>
+      <span class="title">分类人气榜</span>
       <span class="spacer"></span>
       {#if !prefs.data.sections.genres}
         <span class="summary">
@@ -343,11 +347,12 @@
     </button>
     {#if prefs.data.sections.genres}
       <div class="section-body" transition:slide={{ duration: SECTION_DURATION }}>
+        <div class="hint">点击按官方人气名次浏览；右键可现导入 / 每日刷新 / 移除</div>
         <input class="box" placeholder="搜索分类（官方全量目录）" bind:value={genreSearch} />
         {#if genreEntries.length === 0}
           <div class="hint">
             {genres.length === 0
-              ? "尚无分类人气数据：先点「开始更新数据」，或输入分类名用「现导入」。"
+              ? "尚无分类人气榜数据：先点「开始更新数据」，或输入分类名用「现导入」。"
               : "没有匹配的分类。"}
           </div>
         {:else}
@@ -394,6 +399,8 @@
         onclick={() => prefs.toggleSection("filters", !prefs.data.sections.filters)}
       >
         <span class="chev" class:open={prefs.data.sections.filters}>{@html ICONS.chevronRight}</span>
+        <span class="bar"></span>
+        <span class="sec-icon">{@html ICONS.filterCircle}</span>
         <span class="title">筛选条件</span>
         <span class="spacer"></span>
         {#if !prefs.data.sections.filters && filterCount > 0}
@@ -409,11 +416,12 @@
           <input class="box" placeholder="搜索" bind:value={filter.keyword} />
         </div>
         <div class="block">
-          <div class="cap">分类 / 标签（已识别；多选取交集，同时满足全部所选）</div>
+          <div class="cap" title="已识别；多选取交集，同时满足全部所选">分类 / 标签</div>
           <input class="box" placeholder="搜索分类…" bind:value={categorySearch} />
           {#if !categorySearch.trim()}
             <SetFilterMenu
-              title="包含分类（交集）"
+              title="包含分类"
+              hint="多选取交集：同时满足全部所选"
               emptyLabel="全部"
               options={categories}
               selection={filter.genres}
@@ -421,6 +429,7 @@
             />
             <SetFilterMenu
               title="排除分类"
+              hint="命中任一所选分类即排除"
               emptyLabel="不排除"
               options={categories}
               selection={filter.excludeGenres}
@@ -473,9 +482,10 @@
               </select>
             </div>
             <div class="block">
-              <div class="cap">发售年份（可多选）</div>
+              <div class="cap">发售年份</div>
               <SetFilterMenu
                 title="包含年份"
+                hint="可多选；作品发售年份需在所选之内"
                 emptyLabel="全部"
                 options={releaseYears.map(String)}
                 selection={filter.selectedYears.map(String)}
@@ -524,6 +534,8 @@
       onclick={() => prefs.toggleSection("imports", !prefs.data.sections.imports)}
     >
       <span class="chev" class:open={prefs.data.sections.imports}>{@html ICONS.chevronRight}</span>
+      <span class="bar"></span>
+      <span class="sec-icon">{@html ICONS.tray}</span>
       <span class="title">渐进导入</span>
       <span class="spacer"></span>
       {#if !prefs.data.sections.imports && importJobActive}
@@ -643,15 +655,37 @@
     gap: 10px;
   }
 
-  /* 分区 = 独立卡片：边界清晰、与主区卡片同一视觉语言 */
+  /* 控制区 = 无边框浅底圆角组（系统设置内容区那种 inset 分组） */
   .card {
     background: var(--panel);
-    border: 1px solid var(--border);
-    border-radius: 12px;
+    border: 0;
+    border-radius: 11px;
     padding: 8px 12px 12px;
     display: flex;
     flex-direction: column;
     gap: 6px;
+  }
+
+  /* 导航区 = macOS 扁平风（无底色，列表直接落在侧栏底上） */
+  .card.flat {
+    background: transparent;
+    border-radius: 0;
+    padding: 0 2px;
+  }
+
+  .bar {
+    width: 3px;
+    height: 12px;
+    border-radius: 2px;
+    background: var(--accent);
+    flex: none;
+    opacity: 0.9;
+  }
+
+  .sec-icon {
+    display: inline-flex;
+    color: var(--accent);
+    flex: none;
   }
 
   .section-head {
