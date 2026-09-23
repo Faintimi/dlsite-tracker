@@ -82,6 +82,7 @@ export function yearsLabel(years: string | number | null | undefined): string {
   if (lower === "all") return "全部";
   if (lower === "daily") return "完整维护";
   if (lower === "quick") return "热榜快更";
+  if (lower === "bootstrap") return "首次初始化";
   if (lower.startsWith("since:")) return `自 ${text.slice("since:".length)} 年至今`;
   if (lower.startsWith("deeper:")) {
     return `续深至最近 ${text.slice("deeper:".length)} 年（跳过已覆盖段）`;

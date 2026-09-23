@@ -240,8 +240,23 @@ fn project_dir_of(app: &AppHandle) -> Result<PathBuf, String> {
         .ok_or_else(|| "无法确定项目目录（out 的上一级）".to_string())
 }
 
+/// Windows GUI 应用启动控制台型子进程时，默认会额外弹出黑色命令行窗口。
+/// 管道的进度与错误已经由文件和应用界面承接，因此统一让后台命令静默运行；
+/// sidecar 本身仍保留控制台子系统，用户直接在终端执行时照常能看到输出。
+fn configure_background_command(command: &mut Command) {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+    #[cfg(not(windows))]
+    let _ = command;
+}
+
 /// 后台启动一个已配置好的子进程（stdout/stderr 丢弃，线程回收退出码）。
 fn spawn_command(mut command: Command) -> Result<(), String> {
+    configure_background_command(&mut command);
     command.stdout(Stdio::null()).stderr(Stdio::null());
     let child = command.spawn().map_err(|e| format!("无法启动任务：{e}"))?;
     std::thread::spawn(move || {
@@ -284,13 +299,14 @@ fn parse_major_minor(raw: &str) -> Option<(u32, u32)> {
 
 #[cfg(windows)]
 fn probe_python(program: &str, prefix: &[&str]) -> Option<(u32, u32)> {
-    let output = Command::new(program)
+    let mut command = Command::new(program);
+    command
         .args(prefix)
         .arg("-c")
         .arg("import sys; print('%d.%d' % (sys.version_info[0], sys.version_info[1]))")
-        .stdin(Stdio::null())
-        .output()
-        .ok()?;
+        .stdin(Stdio::null());
+    configure_background_command(&mut command);
+    let output = command.output().ok()?;
     if !output.status.success() {
         return None;
     }
@@ -338,6 +354,7 @@ fn python_command(project_dir: &Path, args: &[&str]) -> Result<Command, String> 
         .args(&interp.prefix)
         .args(args)
         .current_dir(project_dir);
+    configure_background_command(&mut command);
     Ok(command)
 }
 
@@ -403,6 +420,7 @@ fn embedded_command(sidecar: &Path, dir: &Path, args: &[&str]) -> Result<Command
         .arg(dir.join("config.ini"))
         .args(args)
         .current_dir(dir);
+    configure_background_command(&mut command);
     Ok(command)
 }
 
@@ -440,9 +458,10 @@ async fn bootstrap_pipeline(app: AppHandle) -> Result<String, String> {
         Err(e) => return Err(format!("初始化失败：{e}")),
     }
 
-    // 首抓：快版热榜（后台运行；进度由 update-progress.json 反馈）。
-    spawn_command(embedded_command(&sidecar, &dir, &["task", "quick"])?)?;
-    Ok("已开始初始化（抓取热榜）".to_string())
+    // 首抓由单一后端链保证完成：热榜富化 → 销量 → 封面 → 最终导出。
+    // 不再依赖前端观察到 quick 完成瞬间后另起 covers，避免轮询错过导致零封面。
+    spawn_command(embedded_command(&sidecar, &dir, &["task", "bootstrap"])?)?;
+    Ok("已开始初始化（抓取热榜并补齐封面）".to_string())
 }
 
 /// 渐进导入开关（对应 macOS 版 scripts/import.sh start|pause）。

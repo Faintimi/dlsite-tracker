@@ -207,6 +207,7 @@ class QuickChainTests(unittest.TestCase):
                 [
                     ["update", "--skip-genre", "--progress-label", "quick"],
                     ["sales", "--hot-days", "7"],
+                    ["images", "--progress-label", "quick"],
                     ["export"],
                 ],
             )
@@ -215,6 +216,37 @@ class QuickChainTests(unittest.TestCase):
             log = (paths.data_dir / "quick-update.log").read_text(encoding="utf-8")
             self.assertIn("快版热榜更新开始", log)
             self.assertIn("快版热榜更新结束（FAILED=0）", log)
+
+
+class BootstrapChainTests(unittest.TestCase):
+    def test_bootstrap_always_finishes_covers_before_export(self) -> None:
+        calls: list = []
+
+        def runner(log_file: Path, name: str, cli_args) -> int:
+            calls.append(list(cli_args))
+            return 0
+
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = _paths(tmp)
+            code = jobs.run_bootstrap(paths, runner=runner)
+            self.assertEqual(code, 0)
+            self.assertEqual(
+                calls,
+                [
+                    ["update", "--skip-genre", "--progress-label", "bootstrap"],
+                    ["sales", "--hot-days", "7"],
+                    ["images", "--progress-label", "bootstrap"],
+                    ["export"],
+                ],
+            )
+            state = json.loads(
+                (paths.out_dir / "update-progress.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(state["phase"], "done")
+            self.assertEqual(state["years"], "bootstrap")
+            log = (paths.data_dir / "bootstrap.log").read_text(encoding="utf-8")
+            self.assertIn("首次初始化开始", log)
+            self.assertIn("首次初始化结束（FAILED=0）", log)
 
 
 class CoversChainTests(unittest.TestCase):

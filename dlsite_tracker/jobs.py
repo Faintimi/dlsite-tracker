@@ -53,7 +53,17 @@ DAILY_STEPS: Sequence[_Step] = (
 QUICK_STEPS: Sequence[_Step] = (
     ("rankings", "快版：榜单 / 列表 / 人气序 + 热榜富化", "update（快版：跳过分类人气页）", ("update", "--skip-genre", "--progress-label", "quick")),
     ("sales", "刷新在榜作品销量（近 7 天上榜）", "sales（在榜销量）", ("sales", "--hot-days", "7")),
+    ("images", "补齐新作品封面", "images（快版封面）", ("images", "--progress-label", "quick")),
     ("export", "导出 out/works.json", "export（导出）", ("export",)),
+)
+
+# 首次初始化必须由同一个后端任务保证封面收尾，不能依赖前端恰好观察到 quick 的
+# running → done 瞬间再接续。update 内部会周期导出，所以封面下载期间仍可先浏览作品。
+BOOTSTRAP_STEPS: Sequence[_Step] = (
+    ("rankings", "首次初始化：抓取热榜并富化作品", "update（首次初始化）", ("update", "--skip-genre", "--progress-label", "bootstrap")),
+    ("sales", "补齐初始作品销量", "sales（初始销量）", ("sales", "--hot-days", "7")),
+    ("images", "补齐初始作品封面", "images（初始封面）", ("images", "--progress-label", "bootstrap")),
+    ("export", "导出含封面的作品数据", "export（初始导出）", ("export",)),
 )
 
 COVERS_STEPS: Sequence[_Step] = (
@@ -306,6 +316,25 @@ def run_quick(
         done_detail="热榜已更新（快版）",
         failed_detail="部分步骤失败；详见 data/quick-update.log",
         steps=QUICK_STEPS,
+        runner=runner or _make_runner(python or _default_python(), paths.config_path),
+    )
+
+
+def run_bootstrap(
+    paths: JobPaths, python: Optional[str] = None, runner: Optional[StepRunner] = None
+) -> int:
+    """首次初始化链：热榜富化 → 销量 → 封面 → 最终导出。"""
+    return _run_chain(
+        paths,
+        years_label="bootstrap",
+        lock_name="bootstrap.lock",
+        log_name="bootstrap.log",
+        busy_message="跳过：首次初始化已在运行（PID {pid}）",
+        start_message="首次初始化开始",
+        end_message="首次初始化结束（FAILED={}）",
+        done_detail="初始作品与封面已就绪",
+        failed_detail="初始化部分步骤失败；详见 data/bootstrap.log",
+        steps=BOOTSTRAP_STEPS,
         runner=runner or _make_runner(python or _default_python(), paths.config_path),
     )
 

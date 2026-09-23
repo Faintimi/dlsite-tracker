@@ -171,6 +171,8 @@
   let lastProgressTs = 0;
   let lastGenreDoneTs = 0;
   let lastImportPhase = "";
+  let progressReady = $state(false);
+  let coverRecoveryAttempted = $state(false);
 
   let scroller: HTMLDivElement | null = $state(null);
   let viewportW = $state(1200);
@@ -450,6 +452,28 @@
 
   const genreJobActive = $derived(genreInfo?.running === true);
 
+  // 旧版首次初始化可能遗留“作品已富化但封面阶段从未启动”的全空状态。
+  // 新版启动后自动修复一次；这是数据管道不变量，不向用户暴露补救按钮。
+  $effect(() => {
+    if (
+      !progressReady ||
+      coverRecoveryAttempted ||
+      status !== "ready" ||
+      works.length === 0 ||
+      works.some((work) => Boolean(work.image_path)) ||
+      isRunning(progress) ||
+      genreJobActive
+    ) {
+      return;
+    }
+    coverRecoveryAttempted = true;
+    void startUpdate("covers")
+      .then(() => pollProgress())
+      .catch((error) => {
+        updateError = `自动补齐封面失败：${String(error)}`;
+      });
+  });
+
   let followScanSignature = "";
   $effect(() => {
     if (!library.loaded || status !== "ready") return;
@@ -722,16 +746,13 @@
         void reload({ quiet: true, keepScroll: true });
       }
       const next = await readProgress();
+      progressReady = true;
       const state = next.state;
       if (state && (state.updated_ts ?? 0) !== lastProgressTs) {
         const previous = progress?.phase;
         lastProgressTs = state.updated_ts ?? 0;
         if (state.phase === "done" && previous && ACTIVE_PHASES.has(previous)) {
-          if (initializing) {
-            initializing = false;
-            // 首次初始化完成 → 先让用户能浏览，随后台自动接封面任务
-            void startUpdate("covers").catch(() => {});
-          }
+          if (initializing) initializing = false;
           void reload({ keepScroll: true }); // 更新完成 → 自动刷新数据（保持浏览位置）
         } else if (state.phase === "failed" && initializing) {
           initializing = false;
@@ -771,7 +792,7 @@
     return genres.find((entry) => entry.id === id)?.name ?? id;
   }
 
-  async function runUpdate(kind: "quick" | "daily" | "update-all", range?: string) {
+  async function runUpdate(kind: "quick" | "daily" | "covers" | "update-all", range?: string) {
     if (isRunning(progress) || genreJobActive) {
       window.alert("已有更新在运行中，进度见顶部横幅。");
       return;

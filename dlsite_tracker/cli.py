@@ -1005,6 +1005,8 @@ def cmd_task(cfg: Config, args: argparse.Namespace) -> int:
         return jobs.run_daily(paths, python=python)
     if args.chain == "quick":
         return jobs.run_quick(paths, python=python)
+    if args.chain == "bootstrap":
+        return jobs.run_bootstrap(paths, python=python)
     if args.chain == "covers":
         return jobs.run_covers(paths, python=python)
     try:
@@ -1161,9 +1163,9 @@ def build_parser() -> argparse.ArgumentParser:
     serve.add_argument("--port", type=int, default=None)
 
     task = sub.add_parser(
-        "task", help="链式任务：daily / quick / update-all（跨平台；scripts/*.sh 的底层实现）"
+        "task", help="链式任务：bootstrap / daily / quick / update-all（跨平台；scripts/*.sh 的底层实现）"
     )
-    task.add_argument("chain", choices=["daily", "quick", "covers", "update-all"], help="要执行的链")
+    task.add_argument("chain", choices=["bootstrap", "daily", "quick", "covers", "update-all"], help="要执行的链")
     task.add_argument(
         "range",
         nargs="?",
