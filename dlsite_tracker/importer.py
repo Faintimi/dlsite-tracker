@@ -37,11 +37,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-try:
-    import fcntl  # POSIX 文件锁（导入单实例）；Windows 移植时降级为无锁
-except ImportError:  # pragma: no cover
-    fcntl = None
-
+from .jobs import PipelineLock, process_alive
 from .discovery import catalog_page_url, extract_catalog_items, extract_sales
 from .enrich import enrich_one
 from .export import export_snapshot
@@ -56,14 +52,37 @@ LOG = logging.getLogger("dlsite_tracker.importer")
 PROGRESS_SCHEMA_VERSION = 2  # P18：新增 source / walk_done / cursor_page 字段
 
 
-def pause_requested(cfg) -> bool:
+def pause_requested(cfg, pipeline_lock: Optional[PipelineLock] = None) -> bool:
     """P22.3：暂停标志（data/import.pause）。
 
     经 bash 后台（&）启动的 python 会忽略 SIGINT（实测验证），暂停/取消不能只靠
     信号——导入循环每翻一页、每处理一件都检查该标志，用户点「暂停」立即可靠生效。
     """
     base = getattr(cfg, "data_dir", None) or Path(cfg.out_dir).parent
-    return (Path(base) / "import.pause").exists()
+    data_dir = Path(base)
+    if (data_dir / "import.pause").exists():
+        return True
+    yield_flag = data_dir / "import.yield"
+    if pipeline_lock is None or not yield_flag.exists():
+        return False
+    # 更新链优先：在作品/页面边界让出共享锁，进程与导入参数保持原样，更新后续跑。
+    pipeline_lock.release()
+    while yield_flag.exists():
+        if (data_dir / "import.pause").exists():
+            return True
+        try:
+            holder = int(yield_flag.read_text(encoding="utf-8").strip())
+        except (OSError, ValueError):
+            holder = -1
+        if holder > 0 and not process_alive(holder):
+            yield_flag.unlink(missing_ok=True)
+            break
+        time.sleep(0.2)
+    while pipeline_lock.acquire() is not None:
+        if (data_dir / "import.pause").exists():
+            return True
+        time.sleep(0.2)
+    return (data_dir / "import.pause").exists()
 BATCH_ROWS = 80  # 每批从队列取多少件（P13：与 info/ajax 批量对齐，80 件/请求）
 PRINT_EVERY = 25  # 终端进度打印频率
 PROGRESS_EVERY = 10  # 进度文件写入频率（每 N 件；DB 计数仍逐件落盘）
@@ -172,29 +191,17 @@ def acquire_import_lock(cfg):
     """尝试独占导入锁（data/import.lock）；已被占用时返回 None。
 
     防止手动导入与每日调度续传并发（两进程会重复请求、计数竞态）。
-    进程退出时锁自动释放（flock 语义）；无 fcntl 的平台（Windows 移植）退化为不加锁。
+    Windows 与 POSIX 均使用同一系统文件锁，进程退出时自动释放。
     """
     path = Path(cfg.data_dir) / "import.lock"
     path.parent.mkdir(parents=True, exist_ok=True)
-    handle = open(path, "w")
-    if fcntl is not None:
-        try:
-            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except OSError:
-            handle.close()
-            return None
-    return handle
+    lock = PipelineLock(path)
+    return lock if lock.acquire() is None else None
 
 
 def release_import_lock(handle) -> None:
-    if handle is None:
-        return
-    if fcntl is not None:
-        try:
-            fcntl.flock(handle, fcntl.LOCK_UN)
-        except OSError:
-            pass
-    handle.close()
+    if handle is not None:
+        handle.release()
 
 
 def _slope(left: Tuple[datetime, int], right: Tuple[datetime, int]) -> float:
@@ -494,7 +501,8 @@ def write_progress(
 
 
 def run_catalog_walk(
-    fetcher, store: Store, cfg, job: Dict[str, Any], max_pages: Optional[int] = None
+    fetcher, store: Store, cfg, job: Dict[str, Any], max_pages: Optional[int] = None,
+    pipeline_lock: Optional[PipelineLock] = None,
 ) -> int:
     """P18 目录遍历：把游戏目录（发售日新→旧）逐页登记进候选队列。
 
@@ -515,7 +523,7 @@ def run_catalog_walk(
     registered = 0
     walked = 0
     while True:
-        if pause_requested(cfg):
+        if pause_requested(cfg, pipeline_lock):
             raise KeyboardInterrupt  # P22.3：暂停标志生效（后台进程忽略 SIGINT 的兜底）
         page += 1
         try:
@@ -595,6 +603,7 @@ def run_import(
     limit: Optional[int] = None,
     source: Optional[str] = None,
     start_page: Optional[int] = None,
+    pipeline_lock: Optional[PipelineLock] = None,
 ) -> Dict[str, Any]:
     """执行（或续传）渐进导入；返回本次会话的统计。
 
@@ -662,7 +671,7 @@ def run_import(
     interrupted = False
     try:
         while True:
-            if pause_requested(cfg):
+            if pause_requested(cfg, pipeline_lock):
                 raise KeyboardInterrupt  # P22.3：暂停标志生效（按批检查）
             processed = sum(session.values())
             if limit is not None and processed >= limit:
@@ -670,7 +679,7 @@ def run_import(
             # P24：先走一小段目录（边登记边入库），再处理一批候选
             if walk_pending and not walk_failed:
                 try:
-                    run_catalog_walk(fetcher, store, cfg, job, max_pages=WALK_CHUNK_PAGES)
+                    run_catalog_walk(fetcher, store, cfg, job, max_pages=WALK_CHUNK_PAGES, pipeline_lock=pipeline_lock)
                 except HttpError as exc:
                     walk_failed = True
                     LOG.error("目录遍历失败（%s）；先处理已登记候选，重跑可续传", exc)
@@ -720,7 +729,7 @@ def run_import(
                     break
                 LOG.warning("批量实查失败，本轮继续富化（销量稍后可用 sales 命令补）：%s", exc)
             for workno in worknos:
-                if pause_requested(cfg):
+                if pause_requested(cfg, pipeline_lock):
                     raise KeyboardInterrupt  # P22.3：暂停标志生效（按件检查）
                 info = infos.get(workno) or {}
                 dl_count = info.get("dl_count")
@@ -834,6 +843,8 @@ def run_import(
     if cover_enabled and not interrupted:
         pending_covers = list_missing_covers(cfg, store)
         for start in range(0, len(pending_covers), cover_batch):
+            if pipeline_lock is not None and (Path(cfg.data_dir) / "import.yield").exists():
+                pause_requested(cfg, pipeline_lock)
             chunk = pending_covers[start : start + cover_batch]
             covers = _download_entries_safe(cfg, fetcher, chunk)
             if covers["downloaded"] or covers["failed"]:

@@ -19,6 +19,7 @@
 - **Followed updates**: detects releases from followed makers within the last 14 calendar days, with a summary banner, sidebar unread count, and a cover list grouped by maker; opening the list clears unread status while NEW labels remain for the full two-week window; “Check now” starts a quick data update and detects additions after reload
 - **First run**: "Initialize data" on the empty state sets everything up on your machine (fetches the hot ranking in ~5–10 minutes) — no Python install, no repository clone
 - **One-click update**: "更新数据 ▾" → quick hot update / full maintenance / deeper import / import last N years; live banner + auto-refresh when done (packaged builds use the embedded pipeline — no extra dependencies)
+- **Coordinated tasks**: a running progressive import yields at a work/page boundary for a hot-ranking update, then continues in the same process from its checkpoint. Windows and macOS use the same file locks to prevent duplicate imports and concurrent database writes. If it cannot yield safely within two minutes, the update asks you to retry later.
 
 ## Requirements
 

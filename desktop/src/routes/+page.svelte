@@ -307,12 +307,12 @@
       const text = genreSummary(genreInfo);
       if (text) return { icon: ICONS.refresh, text };
     }
-    if (importInfo?.running) {
-      const text = importSummary(importInfo);
-      if (text) return { icon: ICONS.refresh, text };
-    }
     if (progress && isRunning(progress)) {
       const text = updateSummary(progress, importInfo);
+      if (text) return { icon: ICONS.refresh, text };
+    }
+    if (importInfo?.running) {
+      const text = importSummary(importInfo);
       if (text) return { icon: ICONS.refresh, text };
     }
     if (genreInfo && !isStale(genreInfo.updated_ts, 6)) {

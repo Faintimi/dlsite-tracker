@@ -251,12 +251,61 @@ def write_state(state_file: Path, phase: str, detail: str, years: str) -> None:
     write_task_progress(state_file, phase, detail=detail, years=years)
 
 
+def acquire_update_lock(
+    paths: JobPaths, state_file: Path, years: str, wait_seconds: float = 120.0
+) -> Tuple[Optional[PipelineLock], Optional[PipelineLock], bool]:
+    """更新链独占；若持锁者是独立导入，令其在断点处暂让并等待。"""
+    intent = PipelineLock(paths.data_dir / "update-intent.lock")
+    if intent.acquire() is not None:
+        return None, None, False
+    lock = PipelineLock(paths.data_dir / "pipeline.lock")
+    holder = lock.acquire()
+    if holder is None:
+        return lock, intent, False
+    try:
+        import_pid = int((paths.data_dir / "import.lock").read_text(encoding="utf-8").strip())
+    except (OSError, ValueError):
+        import_pid = -1
+    if holder != import_pid or holder <= 0:
+        intent.release()
+        return None, None, False
+    flag = paths.data_dir / "import.yield"
+    try:
+        flag.write_text(str(os.getpid()), encoding="utf-8")
+        write_state(state_file, "waiting", "等待渐进导入保存断点，然后更新热榜", years)
+    except OSError:
+        flag.unlink(missing_ok=True)
+        intent.release()
+        raise
+    deadline = time.monotonic() + wait_seconds
+    while time.monotonic() < deadline:
+        if lock.acquire() is None:
+            return lock, intent, True
+        time.sleep(0.2)
+    flag.unlink(missing_ok=True)
+    intent.release()
+    write_state(state_file, "busy", "导入尚未让出；本次更新未执行，请稍后重试", years)
+    return None, None, False
+
+
+def release_update_lock(paths: JobPaths, lock: PipelineLock, intent: PipelineLock, yielded: bool) -> None:
+    try:
+        if yielded:
+            (paths.data_dir / "import.yield").unlink(missing_ok=True)
+    finally:
+        try:
+            lock.release()
+        finally:
+            intent.release()
+
+
 def run_step(log_file: Path, name: str, command: Sequence[str]) -> int:
     """执行一步并把输出追加到日志；退出码 3 视为跳过（不计失败）。"""
     log_file.parent.mkdir(parents=True, exist_ok=True)
     with open(log_file, "a", encoding="utf-8") as handle:
         code = subprocess.run(
-            list(command), stdout=handle, stderr=subprocess.STDOUT
+            list(command), stdout=handle, stderr=subprocess.STDOUT,
+            env={**os.environ, "DLST_PIPELINE_CHAIN": "1"},
         ).returncode
     if code == 0:
         _append(log_file, f"[ok] {name}")
@@ -272,7 +321,8 @@ def run_raw(log_file: Path, command: Sequence[str]) -> int:
     log_file.parent.mkdir(parents=True, exist_ok=True)
     with open(log_file, "a", encoding="utf-8") as handle:
         return subprocess.run(
-            list(command), stdout=handle, stderr=subprocess.STDOUT
+            list(command), stdout=handle, stderr=subprocess.STDOUT,
+            env={**os.environ, "DLST_PIPELINE_CHAIN": "1"},
         ).returncode
 
 
@@ -310,16 +360,21 @@ def _run_chain(
 ) -> int:
     log_file = paths.data_dir / log_name
     state_file = paths.out_dir / "update-progress.json"
-    lock = PipelineLock(paths.data_dir / "pipeline.lock")
-    holder = lock.acquire()
-    if holder is not None:
-        if holder > 0:
-            _append(log_file, f"===== {_timestamp()} {busy_message.format(pid=holder)} =====")
+    lock, intent, yielded = acquire_update_lock(paths, state_file, years_label)
+    if lock is None or intent is None:
+        try:
+            holder = int((paths.data_dir / "pipeline.lock").read_text(encoding="utf-8").strip())
+        except (OSError, ValueError):
+            holder = -1
+        _append(log_file, f"===== {_timestamp()} {busy_message.format(pid=holder)} =====")
         return 3
     try:
         failed = 0
         _append(log_file, f"===== {_timestamp()} {start_message} =====")
         for phase, detail, name, cli_args in steps:
+            if phase == "import" and (paths.data_dir / "import.pause").exists():
+                _append(log_file, "[skip] 渐进导入已被用户暂停；不自动续传")
+                continue
             write_state(state_file, phase, detail, years_label)
             code = runner(log_file, name, cli_args)
             if code not in (0, 3):
@@ -338,7 +393,7 @@ def _run_chain(
         _append(log_file, f"===== {_timestamp()} 收到中断（锁已释放） =====")
         return 130
     finally:
-        lock.release()
+        release_update_lock(paths, lock, intent, yielded)
 
 
 def run_daily(
@@ -471,11 +526,9 @@ def run_update_all(
     log_file = paths.data_dir / "update.log"
     state_file = paths.out_dir / "update-progress.json"
     raw = runner or _make_raw_runner(python or _default_python(), paths.config_path)
-    lock = PipelineLock(paths.data_dir / "pipeline.lock")
-    holder = lock.acquire()
-    if holder is not None:
-        if holder > 0:
-            _append(log_file, f"===== {_timestamp()} 跳过：已有更新在运行（PID {holder}） =====")
+    lock, intent, yielded = acquire_update_lock(paths, state_file, years)
+    if lock is None or intent is None:
+        _append(log_file, f"===== {_timestamp()} 跳过：已有任务运行 =====")
         # 持锁任务仍在写同一份进度文件；拒绝新任务时不能覆盖它的活动阶段。
         return 3
     try:
@@ -522,4 +575,4 @@ def run_update_all(
         write_state(state_file, "failed", "更新被中断；详见 data/update.log", years)
         return 130
     finally:
-        lock.release()
+        release_update_lock(paths, lock, intent, yielded)

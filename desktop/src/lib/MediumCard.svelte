@@ -41,7 +41,7 @@
   <div class="top">
     <Cover src={game._cover} width={92} height={122} rounded />
     <div class="info">
-      <div class="title">{game.title}</div>
+      <div class="title" title={game.title}>{game.title}</div>
       <button
         class="maker"
         title="查看该作者的全部库内作品"
@@ -141,12 +141,10 @@
     font-size: 13px;
     font-weight: 600;
     line-height: 16px;
-    display: -webkit-box;
-    -webkit-line-clamp: 2;
-    line-clamp: 2;
-    -webkit-box-orient: vertical;
+    white-space: nowrap;
+    text-overflow: ellipsis;
     overflow: hidden;
-    height: 32px;
+    height: 16px;
   }
 
   .maker {

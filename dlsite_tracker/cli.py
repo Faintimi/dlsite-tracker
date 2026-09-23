@@ -878,7 +878,12 @@ def cmd_import_recent(cfg: Config, args: argparse.Namespace) -> int:
         if lock is None:
             print("[导入] 已有导入进程在运行；本次跳过（避免并发重复请求；退出码 3）")
             return 3
+        pipeline_lock = None
         try:
+            if os.environ.get("DLST_PIPELINE_CHAIN") != "1":
+                pipeline_lock = jobs.PipelineLock(cfg.data_dir / "pipeline.lock")
+                while pipeline_lock.acquire() is not None:
+                    time.sleep(0.2)
             fetcher = _fetcher(cfg)
             run_id = store.start_run("import-recent")
             started = time.monotonic()
@@ -892,6 +897,7 @@ def cmd_import_recent(cfg: Config, args: argparse.Namespace) -> int:
                     limit=args.limit,
                     source=source,
                     start_page=start_page,
+                    pipeline_lock=pipeline_lock,
                 )
             except KeyboardInterrupt:
                 store.finish_run(run_id, True, "中断（断点已保存）")
@@ -932,6 +938,8 @@ def cmd_import_recent(cfg: Config, args: argparse.Namespace) -> int:
                 )
             return 130 if result["status"] == "interrupted" else 0
         finally:
+            if pipeline_lock is not None:
+                pipeline_lock.release()
             release_import_lock(lock)
     finally:
         store.close()

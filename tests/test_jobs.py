@@ -4,11 +4,14 @@ import json
 import os
 import sys
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
-from dlsite_tracker import jobs
+from dlsite_tracker import importer, jobs
 
 
 def _paths(tmp: str) -> jobs.JobPaths:
@@ -66,6 +69,73 @@ class PipelineLockTests(unittest.TestCase):
             finally:
                 lock.release()
             self.assertEqual(jobs.run_quick(paths, runner=lambda *args: 0), 0)
+
+    def test_import_yields_to_quick_and_resumes_with_same_process(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = _paths(tmp)
+            import_lock = jobs.PipelineLock(paths.data_dir / "import.lock")
+            pipeline_lock = jobs.PipelineLock(paths.data_dir / "pipeline.lock")
+            self.assertIsNone(import_lock.acquire())
+            self.assertIsNone(pipeline_lock.acquire())
+            calls = []
+
+            def runner(*args) -> int:
+                calls.append(args[1])
+                self.assertIsNotNone(jobs.PipelineLock(paths.data_dir / "pipeline.lock").acquire())
+                return 0
+
+            result = []
+            worker = threading.Thread(target=lambda: result.append(jobs.run_quick(paths, runner=runner)))
+            worker.start()
+            try:
+                deadline = time.monotonic() + 3
+                while not (paths.data_dir / "import.yield").exists() and time.monotonic() < deadline:
+                    time.sleep(0.01)
+                self.assertTrue((paths.data_dir / "import.yield").exists())
+                cfg = SimpleNamespace(data_dir=paths.data_dir, out_dir=paths.out_dir)
+                self.assertFalse(importer.pause_requested(cfg, pipeline_lock))
+                worker.join(timeout=3)
+                self.assertFalse(worker.is_alive())
+                self.assertEqual(result, [0])
+                self.assertEqual(len(calls), len(jobs.QUICK_STEPS))
+                self.assertIsNotNone(jobs.PipelineLock(paths.data_dir / "pipeline.lock").acquire())
+            finally:
+                pipeline_lock.release()
+                import_lock.release()
+
+    def test_import_lock_prevents_duplicate_imports(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = SimpleNamespace(data_dir=Path(tmp))
+            first = importer.acquire_import_lock(cfg)
+            self.assertIsNotNone(first)
+            try:
+                self.assertIsNone(importer.acquire_import_lock(cfg))
+            finally:
+                importer.release_import_lock(first)
+            second = importer.acquire_import_lock(cfg)
+            self.assertIsNotNone(second)
+            importer.release_import_lock(second)
+
+    def test_update_timeout_clears_yield_request(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = _paths(tmp)
+            import_lock = jobs.PipelineLock(paths.data_dir / "import.lock")
+            pipeline_lock = jobs.PipelineLock(paths.data_dir / "pipeline.lock")
+            self.assertIsNone(import_lock.acquire())
+            self.assertIsNone(pipeline_lock.acquire())
+            try:
+                lock, intent, yielded = jobs.acquire_update_lock(
+                    paths, paths.out_dir / "update-progress.json", "quick", wait_seconds=0.01
+                )
+                self.assertIsNone(lock)
+                self.assertIsNone(intent)
+                self.assertFalse(yielded)
+                self.assertFalse((paths.data_dir / "import.yield").exists())
+                state = json.loads((paths.out_dir / "update-progress.json").read_text(encoding="utf-8"))
+                self.assertEqual(state["phase"], "busy")
+            finally:
+                pipeline_lock.release()
+                import_lock.release()
 
 
 class WriteStateTests(unittest.TestCase):
@@ -136,6 +206,16 @@ class RunStepTests(unittest.TestCase):
 
 
 class DailyChainTests(unittest.TestCase):
+    def test_daily_does_not_resume_user_paused_import(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = _paths(tmp)
+            paths.data_dir.mkdir()
+            (paths.data_dir / "import.pause").write_text("pause\n", encoding="utf-8")
+            calls = []
+            self.assertEqual(jobs.run_daily(paths, runner=lambda _log, name, _args: calls.append(name) or 0), 0)
+            self.assertNotIn("import-recent（渐进导入续传）", calls)
+            self.assertIn("渐进导入已被用户暂停", (paths.data_dir / "daily.log").read_text(encoding="utf-8"))
+
     def test_daily_ok(self) -> None:
         calls: list = []
 

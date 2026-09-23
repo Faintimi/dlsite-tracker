@@ -62,7 +62,7 @@ interface ProgressFiles {
 }
 
 /** 运行中的阶段（与 macOS 版横幅一致）。 */
-export const ACTIVE_PHASES = new Set(["init", "rankings", "sales", "images", "export", "import"]);
+export const ACTIVE_PHASES = new Set(["waiting", "init", "rankings", "sales", "images", "export", "import"]);
 
 export function isRunning(state: UpdateState | null | undefined): boolean {
   return !!state && ACTIVE_PHASES.has(state.phase ?? "");
@@ -92,6 +92,8 @@ export function yearsLabel(years: string | number | null | undefined): string {
 
 export function phaseLabel(state: UpdateState | null | undefined): string {
   switch (state?.phase) {
+    case "waiting":
+      return state.detail ?? "正在等待渐进导入保存断点…";
     case "init":
       return "正在准备本地数据库…";
     case "rankings":
@@ -122,6 +124,8 @@ export function updateSummary(
 ): string {
   const scope = state.years ? `（${yearsLabel(state.years)}）` : "";
   switch (state.phase) {
+    case "waiting":
+      return `更新待开始${scope}：${state.detail ?? "等待渐进导入保存断点"}`;
     case "init":
       return `初始化中${scope}：正在准备本地数据库…`;
     case "rankings":
