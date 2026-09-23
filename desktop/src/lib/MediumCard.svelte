@@ -51,15 +51,21 @@
         }}
         ondblclick={(event) => event.stopPropagation()}
       >{game.maker || "制作者未知"}</button>
-      {#if categories.length > 0}
-        <CategoryChips {categories} limit={5} ontap={oncats} />
-      {/if}
-      {#if forms.length > 0}
-        <FormChips {forms} limit={1} ontap={onform} />
-      {/if}
-      {#if showBadges}
-        <GameBadges {game} ontap={onbadge} />
-      {/if}
+      <div class="category-slot">
+        {#if categories.length > 0}
+          <CategoryChips {categories} limit={5} maxRows={2} ontap={oncats} />
+        {/if}
+      </div>
+      <div class="form-slot">
+        {#if forms.length > 0}
+          <FormChips {forms} limit={1} ontap={onform} />
+        {/if}
+      </div>
+      <div class="badge-slot">
+        {#if showBadges}
+          <GameBadges {game} ontap={onbadge} />
+        {/if}
+      </div>
     </div>
   </div>
   <GameMetaFlow {game} {showRatingCount} {rankText} />
@@ -127,6 +133,10 @@
     gap: 4px;
   }
 
+  .category-slot { height: 43px; overflow: hidden; }
+  .form-slot { height: 19px; overflow: hidden; }
+  .badge-slot { height: 36px; overflow: hidden; }
+
   .title {
     font-size: 13px;
     font-weight: 600;
@@ -136,6 +146,7 @@
     line-clamp: 2;
     -webkit-box-orient: vertical;
     overflow: hidden;
+    height: 32px;
   }
 
   .maker {
@@ -144,6 +155,7 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+    height: 14px;
   }
 
   .bottom {

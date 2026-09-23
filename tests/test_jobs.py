@@ -53,6 +53,21 @@ class ChainLockTests(unittest.TestCase):
             self.assertEqual((lock_dir / "pid").read_text().strip(), str(os.getpid()))
 
 
+class PipelineLockTests(unittest.TestCase):
+    def test_shared_lock_blocks_other_update_kind(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = _paths(tmp)
+            lock = jobs.PipelineLock(paths.data_dir / "pipeline.lock")
+            self.assertIsNone(lock.acquire())
+            try:
+                self.assertEqual(jobs.run_quick(paths, runner=lambda *args: 0), 3)
+                self.assertEqual(jobs.run_bootstrap(paths, runner=lambda *args: 0), 3)
+                self.assertEqual(jobs.run_update_all(paths, runner=lambda *args: 0), 3)
+            finally:
+                lock.release()
+            self.assertEqual(jobs.run_quick(paths, runner=lambda *args: 0), 0)
+
+
 class WriteStateTests(unittest.TestCase):
     def test_payload_shape(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -148,7 +163,7 @@ class DailyChainTests(unittest.TestCase):
             log = (paths.data_dir / "daily.log").read_text(encoding="utf-8")
             self.assertIn("每日任务开始", log)
             self.assertIn("每日任务结束（FAILED=0）", log)
-            self.assertFalse((paths.data_dir / "daily.lock").exists())
+            self.assertTrue((paths.data_dir / "pipeline.lock").exists())
 
     def test_daily_failure_marks_failed(self) -> None:
         codes = iter([0, 5, 0, 0, 0])
@@ -181,13 +196,15 @@ class DailyChainTests(unittest.TestCase):
     def test_daily_busy_when_locked(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             paths = _paths(tmp)
-            lock_dir = paths.data_dir / "daily.lock"
-            lock_dir.mkdir(parents=True)
-            (lock_dir / "pid").write_text(str(os.getpid()), encoding="utf-8")
-            code = jobs.run_daily(paths, runner=lambda *a: 0)
-            self.assertEqual(code, 3)
-            log = (paths.data_dir / "daily.log").read_text(encoding="utf-8")
-            self.assertIn("跳过：每日任务已在运行", log)
+            lock = jobs.PipelineLock(paths.data_dir / "pipeline.lock")
+            self.assertIsNone(lock.acquire())
+            try:
+                code = jobs.run_daily(paths, runner=lambda *a: 0)
+                self.assertEqual(code, 3)
+                log = (paths.data_dir / "daily.log").read_text(encoding="utf-8")
+                self.assertIn("跳过：每日任务已在运行", log)
+            finally:
+                lock.release()
 
 
 class QuickChainTests(unittest.TestCase):
@@ -233,6 +250,7 @@ class BootstrapChainTests(unittest.TestCase):
             self.assertEqual(
                 calls,
                 [
+                    ["init"],
                     ["update", "--skip-genre", "--progress-label", "bootstrap"],
                     ["sales", "--hot-days", "7"],
                     ["images", "--progress-label", "bootstrap"],
@@ -247,6 +265,20 @@ class BootstrapChainTests(unittest.TestCase):
             log = (paths.data_dir / "bootstrap.log").read_text(encoding="utf-8")
             self.assertIn("首次初始化开始", log)
             self.assertIn("首次初始化结束（FAILED=0）", log)
+
+    def test_failed_init_stops_before_network_work(self) -> None:
+        calls: list = []
+
+        def runner(log_file: Path, name: str, cli_args) -> int:
+            calls.append(list(cli_args))
+            return 1
+
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = _paths(tmp)
+            self.assertEqual(jobs.run_bootstrap(paths, runner=runner), 1)
+            self.assertEqual(calls, [["init"]])
+            state = json.loads((paths.out_dir / "update-progress.json").read_text(encoding="utf-8"))
+            self.assertEqual(state["phase"], "failed")
 
 
 class CoversChainTests(unittest.TestCase):
@@ -312,7 +344,7 @@ class UpdateAllTests(unittest.TestCase):
             log = (paths.data_dir / "update.log").read_text(encoding="utf-8")
             self.assertIn("一键更新开始（最近 2 年）", log)
             self.assertIn("一键更新结束（最近 2 年）", log)
-            self.assertFalse((paths.data_dir / "update.lock").exists())
+            self.assertTrue((paths.data_dir / "pipeline.lock").exists())
 
     def test_deeper_flow(self) -> None:
         calls: list = []

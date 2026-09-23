@@ -7,6 +7,10 @@
   --muted: #6b6b74;
   --border: #e2e2e8;
   --accent: #d94f2b;
+  --form-chip: #007aff;
+  --voice-chip: #d42e70;
+  --music-chip: #734ad9;
+  --video-chip: #05948f;
   --codebg: #ececf1;
   --coverbg: #e8e8ee;
 }

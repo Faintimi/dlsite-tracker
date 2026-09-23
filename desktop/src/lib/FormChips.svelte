@@ -1,4 +1,5 @@
 <script lang="ts">
+  import TagChip from "./TagChip.svelte";
   let {
     forms,
     limit = 100,
@@ -15,13 +16,12 @@
 
 <div class="chips">
   {#each shown as name (name)}
-    {#if ontap}
-      <button class="chip" title={`点击筛选形式「${name}」（再点取消）`} onclick={() => ontap(name)}>
-        {name}
-      </button>
-    {:else}
-      <span class="chip">{name}</span>
-    {/if}
+    <TagChip
+      kind="form"
+      text={name}
+      title={ontap ? `点击筛选形式「${name}」（再点取消）` : ""}
+      onclick={ontap ? () => ontap(name) : undefined}
+    />
   {/each}
   {#if more > 0}<span class="more">+{more}</span>{/if}
 </div>
@@ -32,30 +32,6 @@
     flex-wrap: wrap;
     gap: 5px;
     min-width: 0;
-  }
-
-  /* P16.1：作品形式 = 实心蓝色胶囊 + 白字 */
-  .chip {
-    appearance: none;
-    border: 0;
-    font: inherit;
-    font-size: 11px;
-    font-weight: 600;
-    line-height: 1;
-    padding: 4px 8px;
-    border-radius: 999px;
-    background: #007aff;
-    color: #fff;
-    white-space: nowrap;
-    cursor: default;
-  }
-
-  button.chip {
-    cursor: pointer;
-  }
-
-  button.chip:hover {
-    filter: brightness(1.12);
   }
 
   .more {

@@ -6,10 +6,13 @@ import json
 import tempfile
 import types
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 from pathlib import Path
+from threading import Barrier
 
 from dlsite_tracker.export import (
+    _atomic_write_text,
     export_current,
     export_snapshot,
     fetch_records,
@@ -31,6 +34,21 @@ class ExportTest(unittest.TestCase):
     def tearDown(self):
         self.store.close()
         self._tmp.cleanup()
+
+    def test_concurrent_exports_do_not_share_temporary_file(self):
+        target = self.out / "works.json"
+        barrier = Barrier(8)
+
+        def write(index: int) -> str:
+            payload = str(index) * 100_000
+            barrier.wait()
+            _atomic_write_text(target, payload)
+            return payload
+
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            payloads = list(pool.map(write, range(8)))
+        self.assertIn(target.read_text(encoding="utf-8"), payloads)
+        self.assertEqual(list(self.out.glob(".works.json.*.tmp")), [])
 
     def _add_work(self, workno: str, **overrides):
         row = {

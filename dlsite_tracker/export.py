@@ -16,6 +16,7 @@ import json
 import logging
 import os
 import sqlite3
+import tempfile
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
@@ -219,9 +220,19 @@ def _render_csv(records: Sequence[Dict[str, Any]]) -> str:
 
 
 def _atomic_write_text(path: Path, text: str) -> None:
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(text, encoding="utf-8")
-    os.replace(tmp, path)
+    # 渐进导入快照与应用手动「更新」可能同时导出；固定 .tmp 文件名会互相覆写。
+    tmp: Optional[Path] = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", dir=path.parent,
+            prefix=f".{path.name}.", suffix=".tmp", delete=False,
+        ) as handle:
+            tmp = Path(handle.name)
+            handle.write(text)
+        os.replace(tmp, path)
+    finally:
+        if tmp is not None:
+            tmp.unlink(missing_ok=True)
 
 
 def write_export(

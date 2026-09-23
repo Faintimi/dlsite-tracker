@@ -7,8 +7,7 @@
 - 状态文件 ``out/update-progress.json``：
   ``schema_version / phase / detail / years / pid / updated_at / updated_ts``
 - 日志：``data/daily.log``、``data/quick-update.log``、``data/update.log``（追加写）
-- 链级锁：``data/daily.lock``、``data/quick-update.lock``、``data/update.lock``
-  （目录锁 + pid 存活判定；进程被强杀留下的陈旧锁会自动清理）
+- 所有更新链共享 ``data/pipeline.lock`` 文件锁；系统在进程退出时自动释放
 - 退出码：0 成功；1 有步骤失败；2 用法错误（仅 update-all）；3 已有同类任务在运行；130 中断
 
 跨平台：进程存活探测在 Windows 上使用 OpenProcess（避免 ``os.kill(pid, 0)`` 的
@@ -60,6 +59,7 @@ QUICK_STEPS: Sequence[_Step] = (
 # 首次初始化必须由同一个后端任务保证封面收尾，不能依赖前端恰好观察到 quick 的
 # running → done 瞬间再接续。update 内部会周期导出，所以封面下载期间仍可先浏览作品。
 BOOTSTRAP_STEPS: Sequence[_Step] = (
+    ("init", "首次初始化：准备本地数据库", "init（首次建库）", ("init",)),
     ("rankings", "首次初始化：抓取热榜并富化作品", "update（首次初始化）", ("update", "--skip-genre", "--progress-label", "bootstrap")),
     ("sales", "补齐初始作品销量", "sales（初始销量）", ("sales", "--hot-days", "7")),
     ("images", "补齐初始作品封面", "images（初始封面）", ("images", "--progress-label", "bootstrap")),
@@ -189,6 +189,63 @@ class ChainLock:
             return 0
 
 
+class PipelineLock:
+    """所有作品更新链共用的系统文件锁；文件常驻，锁随进程退出自动释放。"""
+
+    def __init__(self, path: Path) -> None:
+        self.path = path
+        self.handle = None
+
+    def acquire(self) -> Optional[int]:
+        """成功返回 None；已占用返回持有者 PID（未知时为 -1）。"""
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        handle = open(self.path, "a+b")
+        try:
+            if os.name == "nt":
+                import msvcrt
+
+                handle.seek(0)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            handle.close()
+            try:
+                return int(self.path.read_text(encoding="utf-8").strip())
+            except (OSError, ValueError):
+                return -1
+        self.handle = handle
+        try:
+            handle.seek(0)
+            handle.truncate()
+            handle.write(str(os.getpid()).encode("ascii"))
+            handle.flush()
+        except OSError:
+            self.release()
+            return -1
+        return None
+
+    def release(self) -> None:
+        handle = self.handle
+        if handle is None:
+            return
+        self.handle = None
+        try:
+            if os.name == "nt":
+                import msvcrt
+
+                handle.seek(0)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        finally:
+            handle.close()
+
+
 def write_state(state_file: Path, phase: str, detail: str, years: str) -> None:
     """原子写入进度状态（应用横幅读取；格式与 bash 版完全一致）。"""
     write_task_progress(state_file, phase, detail=detail, years=years)
@@ -241,7 +298,6 @@ def _run_chain(
     paths: JobPaths,
     *,
     years_label: str,
-    lock_name: str,
     log_name: str,
     busy_message: str,
     start_message: str,
@@ -250,10 +306,11 @@ def _run_chain(
     failed_detail: str,
     steps: Sequence[_Step],
     runner: StepRunner,
+    stop_on_failure: bool = False,
 ) -> int:
     log_file = paths.data_dir / log_name
     state_file = paths.out_dir / "update-progress.json"
-    lock = ChainLock(paths.data_dir / lock_name)
+    lock = PipelineLock(paths.data_dir / "pipeline.lock")
     holder = lock.acquire()
     if holder is not None:
         if holder > 0:
@@ -267,6 +324,8 @@ def _run_chain(
             code = runner(log_file, name, cli_args)
             if code not in (0, 3):
                 failed = 1
+                if stop_on_failure:
+                    break
         write_state(
             state_file,
             "done" if failed == 0 else "failed",
@@ -289,7 +348,6 @@ def run_daily(
     return _run_chain(
         paths,
         years_label="daily",
-        lock_name="daily.lock",
         log_name="daily.log",
         busy_message="跳过：每日任务已在运行（PID {pid}）",
         start_message="每日任务开始",
@@ -308,7 +366,6 @@ def run_quick(
     return _run_chain(
         paths,
         years_label="quick",
-        lock_name="quick-update.lock",
         log_name="quick-update.log",
         busy_message="跳过：快版热榜更新已在运行（PID {pid}）",
         start_message="快版热榜更新开始",
@@ -327,7 +384,6 @@ def run_bootstrap(
     return _run_chain(
         paths,
         years_label="bootstrap",
-        lock_name="bootstrap.lock",
         log_name="bootstrap.log",
         busy_message="跳过：首次初始化已在运行（PID {pid}）",
         start_message="首次初始化开始",
@@ -336,6 +392,7 @@ def run_bootstrap(
         failed_detail="初始化部分步骤失败；详见 data/bootstrap.log",
         steps=BOOTSTRAP_STEPS,
         runner=runner or _make_runner(python or _default_python(), paths.config_path),
+        stop_on_failure=True,
     )
 
 
@@ -346,7 +403,6 @@ def run_covers(
     return _run_chain(
         paths,
         years_label="covers",
-        lock_name="covers.lock",
         log_name="covers.log",
         busy_message="跳过：封面补齐已在运行（PID {pid}）",
         start_message="封面补齐开始",
@@ -415,14 +471,12 @@ def run_update_all(
     log_file = paths.data_dir / "update.log"
     state_file = paths.out_dir / "update-progress.json"
     raw = runner or _make_raw_runner(python or _default_python(), paths.config_path)
-    lock = ChainLock(paths.data_dir / "update.lock")
+    lock = PipelineLock(paths.data_dir / "pipeline.lock")
     holder = lock.acquire()
     if holder is not None:
         if holder > 0:
             _append(log_file, f"===== {_timestamp()} 跳过：已有更新在运行（PID {holder}） =====")
-            write_state(state_file, "busy", f"已有更新在运行（PID {holder}）；请稍后再试", years)
-        else:
-            write_state(state_file, "busy", "无法获取更新锁", years)
+        # 持锁任务仍在写同一份进度文件；拒绝新任务时不能覆盖它的活动阶段。
         return 3
     try:
         _append(log_file, f"===== {_timestamp()} 一键更新开始（{scope}） =====")

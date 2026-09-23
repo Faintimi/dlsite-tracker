@@ -449,16 +449,7 @@ async fn bootstrap_pipeline(app: AppHandle) -> Result<String, String> {
         },
     )?;
 
-    // init 幂等：创建 data/、out/covers 与数据库。
-    let mut init = embedded_command(&sidecar, &dir, &["init"])?;
-    let init_status = init.stdout(Stdio::null()).stderr(Stdio::null()).status();
-    match init_status {
-        Ok(code) if code.success() => {}
-        Ok(_) => return Err("初始化失败：无法写入数据目录".to_string()),
-        Err(e) => return Err(format!("初始化失败：{e}")),
-    }
-
-    // 首抓由单一后端链保证完成：热榜富化 → 销量 → 封面 → 最终导出。
+    // 初始化与首抓都在同一把后端锁内：建库 → 热榜富化 → 销量 → 封面 → 导出。
     // 不再依赖前端观察到 quick 完成瞬间后另起 covers，避免轮询错过导致零封面。
     spawn_command(embedded_command(&sidecar, &dir, &["task", "bootstrap"])?)?;
     Ok("已开始初始化（抓取热榜并补齐封面）".to_string())

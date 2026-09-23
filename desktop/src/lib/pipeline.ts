@@ -62,7 +62,7 @@ interface ProgressFiles {
 }
 
 /** 运行中的阶段（与 macOS 版横幅一致）。 */
-export const ACTIVE_PHASES = new Set(["rankings", "sales", "images", "export", "import"]);
+export const ACTIVE_PHASES = new Set(["init", "rankings", "sales", "images", "export", "import"]);
 
 export function isRunning(state: UpdateState | null | undefined): boolean {
   return !!state && ACTIVE_PHASES.has(state.phase ?? "");
@@ -92,6 +92,8 @@ export function yearsLabel(years: string | number | null | undefined): string {
 
 export function phaseLabel(state: UpdateState | null | undefined): string {
   switch (state?.phase) {
+    case "init":
+      return "正在准备本地数据库…";
     case "rankings":
       return "正在抓取热榜（榜单/列表/人气序）并富化新作…";
     case "sales":
@@ -120,6 +122,8 @@ export function updateSummary(
 ): string {
   const scope = state.years ? `（${yearsLabel(state.years)}）` : "";
   switch (state.phase) {
+    case "init":
+      return `初始化中${scope}：正在准备本地数据库…`;
     case "rankings":
       if (state.detail?.startsWith("富化 ")) {
         return `更新中${scope}：${state.detail}…`;
@@ -154,7 +158,10 @@ export function importSummary(progress: ImportProgress): string {
     case "enrich": {
       const stateText = progress.running ? "进行中" : "已暂停（打开「渐进导入」开关可继续）";
       if (progress.walk_done === false && typeof progress.cursor_page === "number") {
-        return `渐进导入${stateText}：目录遍历第 ${progress.cursor_page} 页（新作先登记，遍历完成后统一入库）· 已登记 ${progress.remaining ?? 0}`;
+        const registered = progress.total ??
+          (progress.enriched ?? 0) + (progress.excluded ?? 0) + skipped +
+          (progress.failed ?? 0) + (progress.remaining ?? 0);
+        return `渐进导入${stateText}：目录遍历第 ${progress.cursor_page} 页 · 已登记候选 ${registered} · 已入库 ${progress.enriched ?? 0} · 待处理 ${progress.remaining ?? 0}`;
       }
       const remaining = progress.remaining ?? 0;
       const total = progress.total;

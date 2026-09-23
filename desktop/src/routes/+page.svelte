@@ -32,6 +32,8 @@
   import YearPickerDialog from "$lib/YearPickerDialog.svelte";
   import Sidebar from "$lib/Sidebar.svelte";
   import TasteEditor from "$lib/TasteEditor.svelte";
+  import TagChip from "$lib/TagChip.svelte";
+  import { CONTENT_FLAG_TAGS } from "$lib/tag";
   import { DEFAULT_COLLECTION_NAME, library } from "$lib/library.svelte";
   import { prefs } from "$lib/prefs.svelte";
   import { ICONS, categoriesOf } from "$lib/ui";
@@ -144,8 +146,11 @@
   let status = $state<Status>("empty");
   let errorMessage = $state("");
   let initializing = $state(false);
+  let initProgressObserved = false;
   let data = $state<LoadedData | null>(null);
   let syncing = $state(false);
+  let updateStarting = $state(false);
+  let updateLaunchToken = 0;
   let lastError = $state("");
   let lastDataStamp = "";
   let loadedAt = $state("");
@@ -156,6 +161,7 @@
   let mode = $state<"browse" | "discover" | "followUpdates">("browse");
   let sort = $state<SortKey>("sales");
   let filter = $state<FilterState>(emptyFilter());
+  const activeContentFlags = $derived(CONTENT_FLAG_TAGS.filter(({ key }) => filter.flags[key]));
   let viewFilter = $state<ViewFilter>({ kind: "all" });
   let importYears = $state("1");
 
@@ -168,7 +174,7 @@
   let importInfo = $state<ImportProgress | null>(null);
   let genreInfo = $state<GenreProgress | null>(null);
   let coverage = $state<ImportCoverage | null>(null);
-  let lastProgressTs = 0;
+  let lastProgressToken = "";
   let lastGenreDoneTs = 0;
   let lastImportPhase = "";
   let progressReady = $state(false);
@@ -451,6 +457,7 @@
   });
 
   const genreJobActive = $derived(genreInfo?.running === true);
+  const pipelineBusy = $derived(initializing || updateStarting || isRunning(progress) || genreJobActive);
 
   // 旧版首次初始化可能遗留“作品已富化但封面阶段从未启动”的全空状态。
   // 新版启动后自动修复一次；这是数据管道不变量，不向用户暴露补救按钮。
@@ -520,7 +527,7 @@
     void filter.priceHigh;
     void filter.genres;
     void filter.excludeGenres;
-    void filter.form;
+    void filter.forms;
     void filter.selectedYears;
     void filter.flags;
     void filter.genreFocus;
@@ -559,7 +566,9 @@
   /** 首次使用：一键初始化内嵌管道（本机抓取热榜，约 5–10 分钟）。
    *  进度与完成后刷新由 pollProgress（2 秒轮询）接管。 */
   async function initPipeline() {
+    if (initializing || status === "ready") return;
     initializing = true;
+    initProgressObserved = false;
     try {
       await bootstrapPipeline();
       console.info("[radar] 已开始初始化（内嵌管道）");
@@ -579,7 +588,12 @@
       data = await loadWorks();
       console.info(`[radar] 已加载 ${data.works.length} 件作品（${data.path}）`);
       if (!options.keepScroll) {
+        // 虚拟列表的逻辑位置与真实滚动容器必须一起归零。
+        // 只改 scrollTop 状态会把行渲染在顶部，却让容器停在旧位置，出现空白列表。
+        scroller?.scrollTo({ top: 0 });
         scrollTop = 0;
+      } else if (scroller) {
+        scrollTop = scroller.scrollTop;
       }
       loadedAt = new Date().toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
       lastError = "";
@@ -605,6 +619,7 @@
 
   /** 更新（对齐 macOS）：先本地同步导出（纯本机、不联网），再重读文件。 */
   async function refreshData() {
+    if (syncing || pipelineBusy || status === "loading") return;
     if (!data) {
       await pick();
       return;
@@ -748,14 +763,22 @@
       const next = await readProgress();
       progressReady = true;
       const state = next.state;
-      if (state && (state.updated_ts ?? 0) !== lastProgressTs) {
+      if (isRunning(state)) updateStarting = false;
+      if (state?.years === "bootstrap" && isRunning(state)) {
+        initProgressObserved = true;
+        if (!data) initializing = true;
+      }
+      const progressToken = state ? `${state.updated_ts ?? 0}:${state.phase ?? ""}:${state.years ?? ""}` : "";
+      if (state && progressToken !== lastProgressToken) {
         const previous = progress?.phase;
-        lastProgressTs = state.updated_ts ?? 0;
-        if (state.phase === "done" && previous && ACTIVE_PHASES.has(previous)) {
+        lastProgressToken = progressToken;
+        if (state.phase === "done" && (initProgressObserved || (previous && ACTIVE_PHASES.has(previous)))) {
           if (initializing) initializing = false;
+          initProgressObserved = false;
           void reload({ keepScroll: true }); // 更新完成 → 自动刷新数据（保持浏览位置）
-        } else if (state.phase === "failed" && initializing) {
+        } else if (state.phase === "failed" && initializing && initProgressObserved) {
           initializing = false;
+          initProgressObserved = false;
           updateError = state.detail || "初始化失败；详见数据目录日志";
         }
       }
@@ -793,15 +816,21 @@
   }
 
   async function runUpdate(kind: "quick" | "daily" | "covers" | "update-all", range?: string) {
-    if (isRunning(progress) || genreJobActive) {
-      window.alert("已有更新在运行中，进度见顶部横幅。");
-      return;
-    }
+    if (pipelineBusy || syncing || status !== "ready") return;
+    updateStarting = true;
+    const launchToken = ++updateLaunchToken;
     try {
       await startUpdate(kind, range);
       await pollProgress();
     } catch (error) {
+      updateStarting = false;
       window.alert(String(error));
+    } finally {
+      // 子进程先启动、随后才写进度；保持忙碌态直到观察到活动阶段。
+      // 极端启动失败且未留下进度时，超时恢复按钮以便重试。
+      setTimeout(() => {
+        if (launchToken === updateLaunchToken) updateStarting = false;
+      }, 30000);
     }
   }
 
@@ -878,7 +907,9 @@
   }
 
   function chipForm(name: string) {
-    filter.form = filter.form === name ? "" : name;
+    filter.forms = filter.forms.includes(name)
+      ? filter.forms.filter((item) => item !== name)
+      : [...filter.forms, name];
   }
 
   function chipBadge(key: "voice" | "music" | "video") {
@@ -1074,13 +1105,13 @@
         >
           {@html ICONS.slider}个性化
         </button>
-        <button class="btn with-icon" onclick={openUpdateMenu}>
+        <button class="btn with-icon" onclick={openUpdateMenu} disabled={status !== "ready" || pipelineBusy || syncing}>
           {@html ICONS.tray}开始更新数据 ▾
         </button>
         <button
           class="btn primary with-icon"
           onclick={() => void refreshData()}
-          disabled={status === "loading" || syncing}
+          disabled={status !== "ready" || syncing || pipelineBusy}
         >
           {@html ICONS.refresh}更新
         </button>
@@ -1200,6 +1231,74 @@
     {/if}
 
     {#if status === "ready" && data}
+      {#if filter.genres.length > 0 || filter.excludeGenres.length > 0 || filter.forms.length > 0 || activeContentFlags.length > 0}
+        <div class="active-filter-groups" aria-label="当前筛选条件">
+          {#if filter.genres.length > 0}
+            <div class="active-filter-group" aria-label="包含分类，全部满足">
+              <span class="active-filter-label" title="所选分类取交集">分类</span>
+              {#each filter.genres as name (name)}
+                <TagChip
+                  kind="category"
+                  text={name}
+                  context="filter"
+                  removable
+                  title={`移除包含分类「${name}」`}
+                  ariaLabel={`移除包含分类「${name}」`}
+                  onclick={() => (filter.genres = filter.genres.filter((item) => item !== name))}
+                />
+              {/each}
+            </div>
+          {/if}
+          {#if filter.excludeGenres.length > 0}
+            <div class="active-filter-group" aria-label="排除分类">
+              <span class="active-filter-label">排除分类</span>
+              {#each filter.excludeGenres as name (name)}
+                <TagChip
+                  kind="excluded"
+                  text={name}
+                  context="filter"
+                  removable
+                  title={`移除排除分类「${name}」`}
+                  ariaLabel={`移除排除分类「${name}」`}
+                  onclick={() => (filter.excludeGenres = filter.excludeGenres.filter((item) => item !== name))}
+                />
+              {/each}
+            </div>
+          {/if}
+          {#if filter.forms.length > 0}
+            <div class="active-filter-group" aria-label="作品形式，符合任一即可">
+              <span class="active-filter-label" title="所选形式取并集">作品形式</span>
+              {#each filter.forms as name (name)}
+                <TagChip
+                  kind="form"
+                  text={name}
+                  context="filter"
+                  removable
+                  title={`移除作品形式「${name}」`}
+                  ariaLabel={`移除作品形式「${name}」`}
+                  onclick={() => (filter.forms = filter.forms.filter((item) => item !== name))}
+                />
+              {/each}
+            </div>
+          {/if}
+          {#if activeContentFlags.length > 0}
+            <div class="active-filter-group" aria-label="内容标志，全部满足">
+              <span class="active-filter-label" title="所选标志取交集">内容标志</span>
+              {#each activeContentFlags as flag (flag.key)}
+                <TagChip
+                  kind={flag.key}
+                  text={flag.label}
+                  context="filter"
+                  removable
+                  title={`移除内容标志「${flag.label}」`}
+                  ariaLabel={`移除内容标志「${flag.label}」`}
+                  onclick={() => (filter.flags = { ...filter.flags, [flag.key]: false })}
+                />
+              {/each}
+            </div>
+          {/if}
+        </div>
+      {/if}
       <div class="count-row">
         <span class="count-text">找到 {filtered.length} 部作品</span>
         <span class="spacer"></span>
@@ -1729,6 +1828,29 @@
 
   .spacer {
     flex: 1;
+  }
+
+  .active-filter-groups {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px 18px;
+    padding: 10px 22px 0;
+  }
+
+  .active-filter-group {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 6px;
+    max-width: 100%;
+  }
+
+  .active-filter-label {
+    color: var(--muted);
+    font-size: 12px;
+    white-space: nowrap;
+    margin-right: 1px;
   }
 
   .count-row {

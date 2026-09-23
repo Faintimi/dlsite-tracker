@@ -481,12 +481,52 @@
             {/each}
           {/if}
         </div>
+        <div class="block">
+          <div class="cap">作品形式</div>
+          <SetFilterMenu
+            title="包含形式"
+            hint="多选取并集：符合任一所选形式即可"
+            emptyLabel="全部"
+            options={forms}
+            selection={filter.forms}
+            onchange={(next) => (filter.forms = next)}
+          />
+        </div>
+        <div class="block">
+          <div class="cap">内容标志</div>
+          <div class="flags">
+            <label class="check">
+              <input
+                type="checkbox"
+                checked={filter.flags.voice}
+                onchange={(event) => (filter.flags = { ...filter.flags, voice: event.currentTarget.checked })}
+              />
+              配音
+            </label>
+            <label class="check">
+              <input
+                type="checkbox"
+                checked={filter.flags.music}
+                onchange={(event) => (filter.flags = { ...filter.flags, music: event.currentTarget.checked })}
+              />
+              音乐
+            </label>
+            <label class="check">
+              <input
+                type="checkbox"
+                checked={filter.flags.video}
+                onchange={(event) => (filter.flags = { ...filter.flags, video: event.currentTarget.checked })}
+              />
+              动画
+            </label>
+          </div>
+        </div>
         <button
           class="more-toggle"
           onclick={() => prefs.set("filtersMore", !prefs.data.filtersMore)}
         >
           <span class="chev" class:open={prefs.data.filtersMore}>{@html ICONS.chevronRight}</span>
-          更多筛选（评分 / 销量 / 价格 / 年份 / 形式 / 标志）
+          更多筛选（评分 / 销量 / 价格 / 年份）
         </button>
         {#if prefs.data.filtersMore}
           <div class="section-body" transition:slide={{ duration: SECTION_DURATION }}>
@@ -498,15 +538,6 @@
             <RangeFields title="销量区间" unit="份" bind:lower={filter.salesLow} bind:upper={filter.salesHigh} />
             <RangeFields title="价格区间" unit="日元" bind:lower={filter.priceLow} bind:upper={filter.priceHigh} />
             <div class="block">
-              <div class="cap">作品形式（如 RPG、SLG）</div>
-              <select class="box" bind:value={filter.form}>
-                <option value="">全部</option>
-                {#each forms as form (form)}
-                  <option value={form}>{form}</option>
-                {/each}
-              </select>
-            </div>
-            <div class="block">
               <div class="cap">发售年份</div>
               <SetFilterMenu
                 title="包含年份"
@@ -516,35 +547,6 @@
                 selection={filter.selectedYears.map(String)}
                 onchange={(next) => (filter.selectedYears = next.map(Number))}
               />
-            </div>
-            <div class="block">
-              <div class="cap">内容标志（可多选，同时满足）</div>
-              <div class="flags">
-                <label class="check">
-                  <input
-                    type="checkbox"
-                    checked={filter.flags.voice}
-                    onchange={(event) => (filter.flags = { ...filter.flags, voice: event.currentTarget.checked })}
-                  />
-                  配音
-                </label>
-                <label class="check">
-                  <input
-                    type="checkbox"
-                    checked={filter.flags.music}
-                    onchange={(event) => (filter.flags = { ...filter.flags, music: event.currentTarget.checked })}
-                  />
-                  音乐
-                </label>
-                <label class="check">
-                  <input
-                    type="checkbox"
-                    checked={filter.flags.video}
-                    onchange={(event) => (filter.flags = { ...filter.flags, video: event.currentTarget.checked })}
-                  />
-                  动画
-                </label>
-              </div>
             </div>
           </div>
         {/if}

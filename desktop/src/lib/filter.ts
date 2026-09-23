@@ -37,8 +37,8 @@ export interface FilterState {
   genres: string[];
   /** 排除分类（命中任一项即排除） */
   excludeGenres: string[];
-  /** 作品形式（"" = 全部） */
-  form: string;
+  /** 作品形式（多选取并集；空 = 全部） */
+  forms: string[];
   /** 发售年份（可多选；空 = 全部） */
   selectedYears: number[];
   /** 内容标志（可多选，同时满足） */
@@ -85,7 +85,7 @@ export function emptyFilter(): FilterState {
     priceHigh: "",
     genres: [],
     excludeGenres: [],
-    form: "",
+    forms: [],
     selectedYears: [],
     flags: { voice: false, music: false, video: false },
     genreFocus: "",
@@ -101,7 +101,7 @@ export function activeFilterCount(f: FilterState): number {
   if (f.includeUnrated) count += 1;
   if (f.salesLow.trim() || f.salesHigh.trim()) count += 1;
   if (f.priceLow.trim() || f.priceHigh.trim()) count += 1;
-  if (f.form) count += 1;
+  count += f.forms.length;
   count += f.selectedYears.length;
   if (f.flags.voice) count += 1;
   if (f.flags.music) count += 1;
@@ -227,7 +227,7 @@ export function applyFilters(
       const year = yearOf(work);
       if (year === null || !years.has(year)) return false;
     }
-    if (f.form && !formsOf(work).includes(f.form)) return false;
+    if (f.forms.length > 0 && !formsOf(work).some((form) => f.forms.includes(form))) return false;
     if (f.flags.voice && !work.voice) return false;
     if (f.flags.music && !work.music) return false;
     if (f.flags.video && !work.video) return false;
