@@ -6,6 +6,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from dlsite_tracker import jobs
 
@@ -67,6 +68,33 @@ class WriteStateTests(unittest.TestCase):
             self.assertFalse((Path(tmp) / "out" / "update-progress.json.tmp").exists())
 
 
+class SelfLauncherTests(unittest.TestCase):
+    """_self_launcher：源码运行 / PyInstaller 打包两种形态；--config 透传。"""
+
+    def test_source_run(self) -> None:
+        self.assertEqual(
+            jobs._self_launcher("/usr/bin/python3"),
+            ["/usr/bin/python3", "-m", "dlsite_tracker"],
+        )
+
+    def test_source_run_with_config(self) -> None:
+        config = Path("/tmp/x/config.ini")
+        self.assertEqual(
+            jobs._self_launcher("/usr/bin/python3", config),
+            ["/usr/bin/python3", "-m", "dlsite_tracker", "--config", str(config)],
+        )
+
+    def test_frozen_uses_self_executable(self) -> None:
+        config = Path("/opt/cfg.ini")
+        with mock.patch.object(sys, "frozen", True, create=True), mock.patch.object(
+            sys, "executable", "/opt/radar-pipeline"
+        ):
+            self.assertEqual(
+                jobs._self_launcher(None, config),
+                ["/opt/radar-pipeline", "--config", str(config)],
+            )
+
+
 class RunStepTests(unittest.TestCase):
     """run_step：默认执行器（子进程 + 日志行）。"""
 
@@ -107,9 +135,9 @@ class DailyChainTests(unittest.TestCase):
             self.assertEqual(
                 [args for _, args in calls],
                 [
-                    ["update"],
+                    ["update", "--progress-label", "daily"],
                     ["sales", "--hot-days", "7"],
-                    ["images"],
+                    ["images", "--progress-label", "daily"],
                     ["export"],
                     ["import-recent", "--auto"],
                 ],
@@ -177,7 +205,7 @@ class QuickChainTests(unittest.TestCase):
             self.assertEqual(
                 calls,
                 [
-                    ["update", "--skip-genre"],
+                    ["update", "--skip-genre", "--progress-label", "quick"],
                     ["sales", "--hot-days", "7"],
                     ["export"],
                 ],
@@ -187,6 +215,29 @@ class QuickChainTests(unittest.TestCase):
             log = (paths.data_dir / "quick-update.log").read_text(encoding="utf-8")
             self.assertIn("快版热榜更新开始", log)
             self.assertIn("快版热榜更新结束（FAILED=0）", log)
+
+
+class CoversChainTests(unittest.TestCase):
+    def test_covers_steps(self) -> None:
+        calls: list = []
+
+        def runner(log_file: Path, name: str, cli_args) -> int:
+            calls.append(list(cli_args))
+            return 0
+
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = _paths(tmp)
+            code = jobs.run_covers(paths, runner=runner)
+            self.assertEqual(code, 0)
+            self.assertEqual(
+                calls, [["images", "--progress-label", "covers"], ["export"]]
+            )
+            state = json.loads(
+                (paths.out_dir / "update-progress.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(state["years"], "covers")
+            log = (paths.data_dir / "covers.log").read_text(encoding="utf-8")
+            self.assertIn("封面补齐开始", log)
 
 
 class UpdateAllTests(unittest.TestCase):

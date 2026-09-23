@@ -25,7 +25,9 @@ import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Optional, Sequence, Tuple
+from typing import Callable, List, Optional, Sequence, Tuple
+
+from .progress import write_task_progress
 
 # 步骤执行器：(日志文件, 步骤名, CLI 参数) -> 退出码（负责写 [ok]/[skip]/[warn] 行）
 StepRunner = Callable[[Path, str, Sequence[str]], int]
@@ -36,9 +38,9 @@ RawRunner = Callable[[Path, Sequence[str]], int]
 _Step = Tuple[str, str, str, Sequence[str]]
 
 DAILY_STEPS: Sequence[_Step] = (
-    ("rankings", "更新热榜：榜单 / 分类人气 / 人气序 + 热榜富化", "update（增量+富化）", ("update",)),
+    ("rankings", "更新热榜：榜单 / 分类人气 / 人气序 + 热榜富化", "update（增量+富化）", ("update", "--progress-label", "daily")),
     ("sales", "刷新在榜作品销量（近 7 天上榜）", "sales（在榜销量）", ("sales", "--hot-days", "7")),
-    ("images", "补齐封面（按配置限额）", "images（封面）", ("images",)),
+    ("images", "补齐封面（按配置限额）", "images（封面）", ("images", "--progress-label", "daily")),
     ("export", "导出 out/works.json", "export（导出）", ("export",)),
     (
         "import",
@@ -49,8 +51,13 @@ DAILY_STEPS: Sequence[_Step] = (
 )
 
 QUICK_STEPS: Sequence[_Step] = (
-    ("rankings", "快版：榜单 / 列表 / 人气序 + 热榜富化", "update（快版：跳过分类人气页）", ("update", "--skip-genre")),
+    ("rankings", "快版：榜单 / 列表 / 人气序 + 热榜富化", "update（快版：跳过分类人气页）", ("update", "--skip-genre", "--progress-label", "quick")),
     ("sales", "刷新在榜作品销量（近 7 天上榜）", "sales（在榜销量）", ("sales", "--hot-days", "7")),
+    ("export", "导出 out/works.json", "export（导出）", ("export",)),
+)
+
+COVERS_STEPS: Sequence[_Step] = (
+    ("images", "补齐封面（按配置限额）", "images（封面）", ("images", "--progress-label", "covers")),
     ("export", "导出 out/works.json", "export（导出）", ("export",)),
 )
 
@@ -61,18 +68,32 @@ class JobPaths:
 
     data_dir: Path
     out_dir: Path
+    config_path: Optional[Path] = None
 
 
 def _default_python() -> str:
     return sys.executable or "python3"
 
 
+def _self_launcher(python: Optional[str], config_path: Optional[Path] = None) -> List[str]:
+    """重启自身继续执行下一步的命令前缀。
+
+    - 源码运行：``<python> -m dlsite_tracker``
+    - PyInstaller 打包（桌面端内嵌管道）：可执行文件本身就是入口
+
+    调用方提供 ``config_path`` 时显式透传 ``--config``，保证子进程使用同一份配置。
+    """
+    if getattr(sys, "frozen", False):
+        launcher = [sys.executable or "python3"]
+    else:
+        launcher = [python or _default_python(), "-m", "dlsite_tracker"]
+    if config_path is not None:
+        launcher += ["--config", str(config_path)]
+    return launcher
+
+
 def _timestamp() -> str:
     return time.strftime("%Y-%m-%d %H:%M:%S")
-
-
-def _now_iso() -> str:
-    return time.strftime("%Y-%m-%dT%H:%M:%S%z")
 
 
 def _append(log_file: Path, line: str) -> None:
@@ -160,21 +181,7 @@ class ChainLock:
 
 def write_state(state_file: Path, phase: str, detail: str, years: str) -> None:
     """原子写入进度状态（应用横幅读取；格式与 bash 版完全一致）。"""
-    payload = {
-        "schema_version": 1,
-        "phase": phase,
-        "detail": detail,
-        "years": years,
-        "pid": os.getpid(),
-        "updated_at": _now_iso(),
-        "updated_ts": int(time.time()),
-    }
-    state_file.parent.mkdir(parents=True, exist_ok=True)
-    tmp = str(state_file) + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as handle:
-        json.dump(payload, handle, ensure_ascii=False, indent=2)
-        handle.write("\n")
-    os.replace(tmp, state_file)
+    write_task_progress(state_file, phase, detail=detail, years=years)
 
 
 def run_step(log_file: Path, name: str, command: Sequence[str]) -> int:
@@ -202,16 +209,20 @@ def run_raw(log_file: Path, command: Sequence[str]) -> int:
         ).returncode
 
 
-def _make_runner(python: str) -> StepRunner:
+def _make_runner(python: str, config_path: Optional[Path] = None) -> StepRunner:
+    launcher = _self_launcher(python, config_path)
+
     def runner(log_file: Path, name: str, cli_args: Sequence[str]) -> int:
-        return run_step(log_file, name, [python, "-m", "dlsite_tracker", *cli_args])
+        return run_step(log_file, name, [*launcher, *cli_args])
 
     return runner
 
 
-def _make_raw_runner(python: str) -> RawRunner:
+def _make_raw_runner(python: str, config_path: Optional[Path] = None) -> RawRunner:
+    launcher = _self_launcher(python, config_path)
+
     def runner(log_file: Path, cli_args: Sequence[str]) -> int:
-        return run_raw(log_file, [python, "-m", "dlsite_tracker", *cli_args])
+        return run_raw(log_file, [*launcher, *cli_args])
 
     return runner
 
@@ -276,7 +287,7 @@ def run_daily(
         done_detail="热榜与数据已更新",
         failed_detail="部分步骤失败；详见 data/daily.log",
         steps=DAILY_STEPS,
-        runner=runner or _make_runner(python or _default_python()),
+        runner=runner or _make_runner(python or _default_python(), paths.config_path),
     )
 
 
@@ -295,7 +306,26 @@ def run_quick(
         done_detail="热榜已更新（快版）",
         failed_detail="部分步骤失败；详见 data/quick-update.log",
         steps=QUICK_STEPS,
-        runner=runner or _make_runner(python or _default_python()),
+        runner=runner or _make_runner(python or _default_python(), paths.config_path),
+    )
+
+
+def run_covers(
+    paths: JobPaths, python: Optional[str] = None, runner: Optional[StepRunner] = None
+) -> int:
+    """封面补齐链（首次初始化完成后由应用自动接续；也可手动执行）。"""
+    return _run_chain(
+        paths,
+        years_label="covers",
+        lock_name="covers.lock",
+        log_name="covers.log",
+        busy_message="跳过：封面补齐已在运行（PID {pid}）",
+        start_message="封面补齐开始",
+        end_message="封面补齐结束（FAILED={}）",
+        done_detail="封面已补齐",
+        failed_detail="部分步骤失败；详见 data/covers.log",
+        steps=COVERS_STEPS,
+        runner=runner or _make_runner(python or _default_python(), paths.config_path),
     )
 
 
@@ -355,7 +385,7 @@ def run_update_all(
     scope = _parse_scope(years)
     log_file = paths.data_dir / "update.log"
     state_file = paths.out_dir / "update-progress.json"
-    raw = runner or _make_raw_runner(python or _default_python())
+    raw = runner or _make_raw_runner(python or _default_python(), paths.config_path)
     lock = ChainLock(paths.data_dir / "update.lock")
     holder = lock.acquire()
     if holder is not None:

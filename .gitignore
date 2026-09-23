@@ -7,6 +7,10 @@ out/
 
 # 应用构建产物
 app/dist/
+desktop/src-tauri/binaries/
+packaging/dist/
+packaging/build/
+packaging/spec/
 
 # 日志
 *.log

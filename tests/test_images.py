@@ -95,6 +95,30 @@ class ImagesTest(unittest.TestCase):
         self.assertEqual(len(list((self.out / "covers").iterdir())), 12)
         self.assertTrue(1 <= len(factory.fetchers) <= 4)  # 并发使用但不超过 workers
 
+    def test_observer_serial(self):
+        cfg = types.SimpleNamespace(out_dir=self.out, images_enabled=True, images_workers=1)
+        entries = [("RJ1", "https://img.dlsite.jp/a.jpg"), ("RJ2", "https://img.dlsite.jp/b.jpg")]
+        events = []
+        result = download_entries(
+            cfg, FakeFetcher(), entries, observer=lambda i, t: events.append((i, t))
+        )
+        self.assertEqual(result["downloaded"], 2)
+        self.assertEqual(events, [(1, 2), (2, 2)])
+
+    def test_observer_parallel(self):
+        cfg = types.SimpleNamespace(out_dir=self.out, images_enabled=True, images_workers=4)
+        entries = [(f"RJ01702{i:03d}", f"https://img.dlsite.jp/{i}.jpg") for i in range(7)]
+        events = []
+        result = download_entries(
+            cfg,
+            FakeFetcher(),
+            entries,
+            worker_factory=Factory(),
+            observer=lambda i, t: events.append((i, t)),
+        )
+        self.assertEqual(result["downloaded"], 7)
+        self.assertEqual(events, [(i, 7) for i in range(1, 8)])
+
     def test_extension_mapping(self):
         self.assertEqual(extension_from_url("https://a/b.webp"), "webp")
         self.assertEqual(extension_from_url("https://a/b.jpeg"), "jpg")

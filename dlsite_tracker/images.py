@@ -94,8 +94,12 @@ def download_entries(
     entries: List[Tuple[str, str]],
     workers: int | None = None,
     worker_factory: Callable[[], Any] | None = None,
+    observer: Optional[Callable[[int, int], None]] = None,
 ) -> Dict[str, int]:
-    """下载给定 (workno, url) 列表；workers>1 时并发（每线程独立 Fetcher）。"""
+    """下载给定 (workno, url) 列表；workers>1 时并发（每线程独立 Fetcher）。
+
+    observer：每张完成后回调 ``(已处理数, 总数)``（供调用方写进度 / 周期快照导出）。
+    """
     results = {"downloaded": 0, "skipped": 0, "failed": 0}
     entries = list(entries)
     if not entries:
@@ -104,9 +108,12 @@ def download_entries(
         LOG.info("封面下载已禁用（config [images] enabled=false）")
         return results
     workers = int(workers if workers is not None else getattr(cfg, "images_workers", 1) or 1)
+    total = len(entries)
     if workers <= 1:
-        for workno, url in entries:
+        for index, (workno, url) in enumerate(entries, start=1):
             results[_download_one(fetcher, cfg, workno, url)] += 1
+            if observer is not None:
+                observer(index, total)
         return results
     factory = worker_factory or _worker_factory(cfg, fetcher)
     local = threading.local()
@@ -120,9 +127,14 @@ def download_entries(
 
     with ThreadPoolExecutor(max_workers=workers) as executor:
         futures = [executor.submit(run, workno, url) for workno, url in entries]
-        for future in futures:
+        for index, future in enumerate(futures, start=1):
             results[future.result()] += 1
+            if observer is not None:
+                observer(index, total)
     return results
+
+
+COVER_EXPORT_EVERY = 100  # 封面周期导出频率（每 N 张；补封面过程中应用可边下载边看到）
 
 
 def download_covers(
@@ -131,10 +143,12 @@ def download_covers(
     store: Store,
     limit: int,
     worknos: Optional[Sequence[str]] = None,
+    observer: Optional[Callable[[int, int], None]] = None,
 ) -> Dict[str, int]:
     """兼容入口：列缺口（skipped 含已存在计数）→ 按 limit 限量 → 并发下载。
 
     worknos（P19.2）：仅补齐清单内作品的封面（现导入定向补图）。
+    observer：透传给 download_entries（每张回调一次，供周期写进度 / 快照导出）。
     """
     if not cfg.images_enabled:
         LOG.info("封面下载已禁用（config [images] enabled=false）")
@@ -151,6 +165,6 @@ def download_covers(
     pre_existing = len(rows) - len(missing)
     if limit is not None and limit >= 0:
         missing = missing[:limit]
-    result = download_entries(cfg, fetcher, missing)
+    result = download_entries(cfg, fetcher, missing, observer=observer)
     result["skipped"] += pre_existing
     return result

@@ -4,10 +4,17 @@ from __future__ import annotations
 
 import json
 import tempfile
+import types
 import unittest
 from pathlib import Path
 
-from dlsite_tracker.export import fetch_records, find_cover, write_export
+from dlsite_tracker.export import (
+    export_current,
+    export_snapshot,
+    fetch_records,
+    find_cover,
+    write_export,
+)
 from dlsite_tracker.store import Store
 
 
@@ -129,6 +136,22 @@ class ExportTest(unittest.TestCase):
         self.assertFalse(records["RJ2"]["voice"])
         self.assertFalse(records["RJ2"]["music"])
         self.assertFalse(records["RJ2"]["video"])
+
+    def test_export_current_and_snapshot(self):
+        self._add_work("RJ1")
+        (self.out / "covers" / "RJ1.jpg").write_bytes(b"x")
+        cfg = types.SimpleNamespace(
+            out_dir=self.out,
+            default_work_types=["SLN"],
+            genre_rank_ids="",
+            sites=["maniax"],
+        )
+        note = export_current(cfg, self.store)
+        self.assertEqual(note, "1 条（含封面 1）")
+        snapshot = export_snapshot(cfg, self.store, "测试快照")
+        self.assertEqual(snapshot, "1 条（含封面 1）")
+        payload = json.loads((self.out / "works.json").read_text(encoding="utf-8"))
+        self.assertEqual(payload["count"], 1)
 
     def test_empty_export(self):
         records = fetch_records(self.store, self.out)

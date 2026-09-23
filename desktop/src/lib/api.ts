@@ -81,6 +81,16 @@ export function runExport(): Promise<string> {
   return invoke<string>("run_export");
 }
 
+/** 首次使用：初始化内嵌管道（写配置 → init → 首抓热榜）。 */
+export function bootstrapPipeline(): Promise<string> {
+  return invoke<string>("bootstrap_pipeline");
+}
+
+/** 数据文件「大小 + 修改时间」戳（轮询检测外部更新用；无文件时 null）。 */
+export function dataFileStamp(): Promise<string | null> {
+  return invoke<string | null>("data_file_stamp");
+}
+
 /** 打开文件选择框；返回选中的 works.json 路径（取消则为 null）。 */
 export function pickDataFile(): Promise<string | null> {
   return invoke<string | null>("pick_data_file");

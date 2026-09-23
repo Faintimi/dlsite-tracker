@@ -120,6 +120,9 @@ export function updateSummary(
   const scope = state.years ? `（${yearsLabel(state.years)}）` : "";
   switch (state.phase) {
     case "rankings":
+      if (state.detail?.startsWith("富化 ")) {
+        return `更新中${scope}：${state.detail}…`;
+      }
       return `更新中${scope}：正在抓取热榜（榜单/列表/人气序）并富化新作…`;
     case "import":
       if (importProgress && importProgress.phase === "enrich") {
@@ -129,7 +132,7 @@ export function updateSummary(
     case "sales":
       return `更新中${scope}：正在刷新销量…`;
     case "images":
-      return `更新中${scope}：正在补齐封面…`;
+      return `更新中${scope}：${state.detail || "正在补齐封面…"}`;
     case "export":
       return `更新中${scope}：正在导出数据…`;
     case "done":
@@ -191,7 +194,7 @@ export function genreSummary(progress: GenreProgress): string {
   }
 }
 
-export type UpdateKind = "quick" | "daily" | "update-all";
+export type UpdateKind = "quick" | "daily" | "covers" | "update-all";
 
 /** 启动管道任务（脚本 / python -m 由后端选择）。 */
 export function startUpdate(kind: UpdateKind, range?: string): Promise<string> {

@@ -144,6 +144,34 @@ class EnrichPendingTest(unittest.TestCase):
             finally:
                 store.close()
 
+    def test_observer_reports_every_50(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = Store(Path(tmp) / "t.sqlite")
+            store.migrate()
+            try:
+                worknos = [f"RJ{i:08d}" for i in range(1, 51)]
+                store.add_pending_many(worknos, source="ranking:maniax:day:game")
+                cfg = types.SimpleNamespace(sites=["maniax"], enrich_batch=100, locale="zh_CN")
+                payloads = {}
+                sales = {}
+                for workno in worknos:
+                    url = PRODUCT_API_URL.format(site="maniax", workno=workno, locale="zh_CN")
+                    payloads[url] = [dict(ITEM, workno=workno)]
+                    sales[workno] = 10
+                fetcher = FakeApiFetcher(payloads, sales=sales)
+                seen: list = []
+                result = enrich_pending(
+                    fetcher,
+                    store,
+                    cfg,  # type: ignore[arg-type]
+                    limit=100,
+                    observer=lambda order, total: seen.append((order, total)),
+                )
+                self.assertEqual(result, {"ok": 50, "fail": 0})
+                self.assertEqual(seen, [(50, 50)])
+            finally:
+                store.close()
+
     def test_hot_only_skips_enriched_works(self):
         """P20：热榜富化只收未入库新作（已富化不再重复刷新）。"""
         with tempfile.TemporaryDirectory() as tmp:

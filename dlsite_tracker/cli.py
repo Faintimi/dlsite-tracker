@@ -27,9 +27,10 @@ from .discovery import (
     fetch_trend_rankings,
 )
 from .enrich import enrich_pending
-from .export import COVER_EXTENSIONS, fetch_records, write_export
+from .export import COVER_EXTENSIONS, export_current, export_snapshot
 from .http import Fetcher, HttpError, RobotsChanged
-from .images import download_covers
+from .progress import write_task_progress
+from .images import COVER_EXPORT_EVERY, download_covers
 from .importer import (
     SOURCE_CATALOG,
     SOURCE_NUMBERS,
@@ -202,6 +203,8 @@ def cmd_update(cfg: Config, args: argparse.Namespace) -> int:
     run_id = store.start_run("update")
     notes: List[str] = []
     full = bool(args.full)
+    label = getattr(args, "progress_label", None) or ""
+    progress_path = cfg.out_dir / "update-progress.json"
     try:
         fetcher = _fetcher(cfg)
         if full and not args.skip_sitemap:
@@ -247,7 +250,16 @@ def cmd_update(cfg: Config, args: argparse.Namespace) -> int:
             notes.append(f"列表 {result['views']} 视图/{result['sales']} 销量")
             print(f"[列表] {result['views']} 个视图，记录销量 {result['sales']} 条")
         limit = args.enrich_limit if args.enrich_limit is not None else cfg.enrich_batch
-        result = enrich_pending(fetcher, store, cfg, limit, hot_only=not full)
+        # 榜单/列表入库后先导出一把：应用立刻可见（失败不中断）
+        export_snapshot(cfg, store, "榜单 / 列表入库")
+
+        def on_enrich(order: int, total: int) -> None:
+            write_task_progress(
+                progress_path, "rankings", detail=f"富化 {order}/{total}", years=label
+            )
+            export_snapshot(cfg, store, f"富化 {order}/{total}")
+
+        result = enrich_pending(fetcher, store, cfg, limit, hot_only=not full, observer=on_enrich)
         mode = "全量" if full else "热榜"
         notes.append(f"富化({mode}) ok={result['ok']} fail={result['fail']}")
         print(
@@ -494,26 +506,12 @@ def cmd_export(cfg: Config, args: argparse.Namespace) -> int:
     store = _open_store(cfg)
     run_id = store.start_run("export")
     try:
-        work_types = split_list(args.work_types) if args.work_types else (cfg.default_work_types or None)
-        records = fetch_records(store, cfg.out_dir, work_types=work_types)
-        watched = set(split_list(cfg.genre_rank_ids))
-        genres = store.genre_summaries()
-        for item in genres:
-            item["watched"] = item["id"] in watched
-        trend_seen = store.get_meta(f"trend_seen:{cfg.sites[0]}") if cfg.sites else None
-        paths = write_export(
-            cfg.out_dir,
-            records,
-            genres=genres,
-            genre_catalog=store.list_genre_catalog(),
-            trend={"depth": store.rank_trend_depth(), "seen_at": trend_seen},
-        )
-        covered = sum(1 for record in records if record["image_path"])
-        note = f"{len(records)} 条（含封面 {covered}）"
+        work_types = split_list(args.work_types) if args.work_types else None
+        note = export_current(cfg, store, work_types=work_types)
         store.finish_run(run_id, True, note)
         print(f"[导出] {note}")
-        print(f"  JSON：{paths['json']}")
-        print(f"  CSV： {paths['csv']}")
+        print(f"  JSON：{cfg.out_dir / 'works.json'}")
+        print(f"  CSV： {cfg.out_dir / 'works.csv'}")
         return 0
     except OSError as exc:
         store.finish_run(run_id, False, str(exc))
@@ -529,6 +527,8 @@ def cmd_images(cfg: Config, args: argparse.Namespace) -> int:
         return 0
     store = _open_store(cfg)
     run_id = store.start_run("images")
+    label = getattr(args, "progress_label", None) or ""
+    progress_path = cfg.out_dir / "update-progress.json"
     try:
         fetcher = _fetcher(cfg)
         limit = args.limit if args.limit is not None else cfg.images_max
@@ -544,7 +544,18 @@ def cmd_images(cfg: Config, args: argparse.Namespace) -> int:
                 store.finish_run(run_id, False, str(exc))
                 LOG.error("作品号清单读取失败：%s", exc)
                 return 1
-        result = download_covers(cfg, fetcher, store, limit, worknos=worknos)
+
+        # 周期批量导出（对齐导入 / 富化）：每 COVER_EXPORT_EVERY 张写进度 + 快照，
+        # 应用可边补封面边看到新增（末尾无论整除与否都补导一次）。
+        def on_cover(index: int, total: int) -> None:
+            if index % COVER_EXPORT_EVERY != 0 and index != total:
+                return
+            write_task_progress(
+                progress_path, "images", detail=f"补封面 {index}/{total}", years=label
+            )
+            export_snapshot(cfg, store, f"补封面 {index}/{total}")
+
+        result = download_covers(cfg, fetcher, store, limit, worknos=worknos, observer=on_cover)
         note = f"下载 {result['downloaded']} / 跳过 {result['skipped']} / 失败 {result['failed']}"
         store.finish_run(run_id, True, note)
         print(f"[封面] {note}")
@@ -988,12 +999,14 @@ def cmd_sales(cfg: Config, args: argparse.Namespace) -> int:
 
 def cmd_task(cfg: Config, args: argparse.Namespace) -> int:
     """链式任务入口（跨平台；scripts/daily.sh 等脚本为其薄包装）。"""
-    paths = jobs.JobPaths(data_dir=cfg.data_dir, out_dir=cfg.out_dir)
+    paths = jobs.JobPaths(data_dir=cfg.data_dir, out_dir=cfg.out_dir, config_path=cfg.path)
     python = sys.executable or "python3"
     if args.chain == "daily":
         return jobs.run_daily(paths, python=python)
     if args.chain == "quick":
         return jobs.run_quick(paths, python=python)
+    if args.chain == "covers":
+        return jobs.run_covers(paths, python=python)
     try:
         return jobs.run_update_all(paths, years=args.range or "1", python=python)
     except ValueError as exc:
@@ -1019,6 +1032,9 @@ def build_parser() -> argparse.ArgumentParser:
     update.add_argument("--skip-rankings", action="store_true", help="跳过榜单抓取")
     update.add_argument("--skip-genre", action="store_true", help="跳过分类人气页（快版：榜单/列表/人气序照常）")
     update.add_argument("--skip-listings", action="store_true", help="跳过列表页抓取")
+    update.add_argument(
+        "--progress-label", help="进度横幅标签（由任务链注入：quick / daily）"
+    )
     update.add_argument("--genres", default=None, help="分类人气列表：分类 id（逗号分隔；默认取配置）")
     update.add_argument(
         "--genre-pages", type=int, default=None, help="每个分类抓取页数（每日默认取配置 genre_daily_pages）"
@@ -1136,6 +1152,9 @@ def build_parser() -> argparse.ArgumentParser:
     images.add_argument(
         "--worknos-file", default=None, help="仅补齐清单内作品（每行一个作品号；P19.2 现导入用）"
     )
+    images.add_argument(
+        "--progress-label", help="进度横幅标签（由任务链注入：covers / daily）"
+    )
 
     serve = sub.add_parser("serve", help="启动本地只读 API（仅 127.0.0.1）")
     serve.add_argument("--host", default=None, help="仅允许回环地址（127.0.0.1/localhost）")
@@ -1144,7 +1163,7 @@ def build_parser() -> argparse.ArgumentParser:
     task = sub.add_parser(
         "task", help="链式任务：daily / quick / update-all（跨平台；scripts/*.sh 的底层实现）"
     )
-    task.add_argument("chain", choices=["daily", "quick", "update-all"], help="要执行的链")
+    task.add_argument("chain", choices=["daily", "quick", "covers", "update-all"], help="要执行的链")
     task.add_argument(
         "range",
         nargs="?",

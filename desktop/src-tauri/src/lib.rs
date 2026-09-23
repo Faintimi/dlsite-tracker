@@ -81,6 +81,10 @@ fn discover_data_file(app: &AppHandle) -> Option<PathBuf> {
             }
         }
     }
+    // 内嵌管道初始化后的默认位置（优先级最低，不改变既有发现行为）。
+    if let Ok(config_dir) = app.path().app_config_dir() {
+        candidates.push(config_dir.join("pipeline").join("out").join("works.json"));
+    }
     candidates.into_iter().find(|path| path.is_file())
 }
 
@@ -208,6 +212,25 @@ fn read_progress_files(app: AppHandle) -> Result<ProgressFiles, String> {
     })
 }
 
+/// 数据文件「大小 + 修改时间（毫秒）」戳：应用轮询检测外部更新（抓取中途导出等）。
+#[tauri::command]
+fn data_file_stamp(app: AppHandle) -> Result<Option<String>, String> {
+    let Some(path) = read_settings(&app).data_path else {
+        return Ok(None);
+    };
+    let meta = match fs::metadata(&path) {
+        Ok(meta) => meta,
+        Err(_) => return Ok(None),
+    };
+    let mtime_ms = meta
+        .modified()
+        .ok()
+        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|duration| duration.as_millis())
+        .unwrap_or(0);
+    Ok(Some(format!("{}:{}", meta.len(), mtime_ms)))
+}
+
 /// 项目目录（out 的上一级）。
 fn project_dir_of(app: &AppHandle) -> Result<PathBuf, String> {
     let out_dir = out_dir_of(app)?;
@@ -324,12 +347,126 @@ fn spawn_python(project_dir: &Path, args: &[&str]) -> Result<(), String> {
     spawn_command(python_command(project_dir, args)?)
 }
 
+// ---------------------------------------------------------------------------
+// 内嵌管道（打包产物随附的 sidecar）：普通用户无需安装 Python / 克隆仓库。
+// 仓库布局（开发与本地自用）优先走系统 Python / 脚本；其余场景用内嵌管道。
+// ---------------------------------------------------------------------------
+
+/// 内嵌管道路径：与主程序同目录的 radar-pipeline[.exe]（仅打包产物有）。
+fn sidecar_path() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let name = if cfg!(windows) {
+        "radar-pipeline.exe"
+    } else {
+        "radar-pipeline"
+    };
+    let path = exe.parent()?.join(name);
+    path.is_file().then_some(path)
+}
+
+/// 数据目录是否为「完整仓库」（含 dlsite_tracker 包）——仓库场景走原生路径。
+fn is_repo_layout(project_dir: &Path) -> bool {
+    project_dir
+        .join("dlsite_tracker")
+        .join("__main__.py")
+        .is_file()
+}
+
+/// 内嵌管道调用目标：sidecar 路径 + 工作目录（= 数据目录，config.ini 也在其中）。
+fn embedded_target(project_dir: &Path) -> Option<(PathBuf, PathBuf)> {
+    if is_repo_layout(project_dir) {
+        return None;
+    }
+    Some((sidecar_path()?, project_dir.to_path_buf()))
+}
+
+/// 确保工作目录里有极简 config.ini（data_dir / out_dir 默认相对本文件解析）。
+fn ensure_pipeline_config(dir: &Path) -> Result<(), String> {
+    let config = dir.join("config.ini");
+    if config.is_file() {
+        return Ok(());
+    }
+    fs::create_dir_all(dir).map_err(|e| format!("无法创建数据目录：{e}"))?;
+    fs::write(
+        &config,
+        "# 同人游戏雷达 · 由桌面应用内嵌管道自动维护\n# data_dir / out_dir 默认相对本文件所在目录解析，如需调整可在此覆盖。\n[general]\n",
+    )
+    .map_err(|e| format!("无法写入管道配置：{e}"))
+}
+
+/// 组装一次内嵌管道调用（sidecar + --config + 工作目录；自动补齐 config.ini）。
+fn embedded_command(sidecar: &Path, dir: &Path, args: &[&str]) -> Result<Command, String> {
+    ensure_pipeline_config(dir)?;
+    let mut command = Command::new(sidecar);
+    command
+        .arg("--config")
+        .arg(dir.join("config.ini"))
+        .args(args)
+        .current_dir(dir);
+    Ok(command)
+}
+
+/// 首次使用：初始化内嵌管道数据目录（写 config.ini → init → 首抓热榜）。
+/// 仅在打包产物中可用（sidecar 存在）；数据落在 <应用数据目录>/pipeline/。
+#[tauri::command]
+async fn bootstrap_pipeline(app: AppHandle) -> Result<String, String> {
+    let Some(sidecar) = sidecar_path() else {
+        return Err("未找到内嵌数据管道（仅打包版支持一键初始化）".to_string());
+    };
+    let dir = app
+        .path()
+        .app_config_dir()
+        .map_err(|e| e.to_string())?
+        .join("pipeline");
+    ensure_pipeline_config(&dir)?;
+    fs::create_dir_all(dir.join("out")).map_err(|e| format!("无法创建数据目录：{e}"))?;
+
+    // 提前记录数据文件路径（初始化完成后前端据此加载；进度文件也在这里）。
+    let out_json = dir.join("out").join("works.json");
+    allow_data_dir(&app, &out_json)?;
+    write_settings(
+        &app,
+        &Settings {
+            data_path: Some(out_json.to_string_lossy().into_owned()),
+        },
+    )?;
+
+    // init 幂等：创建 data/、out/covers 与数据库。
+    let mut init = embedded_command(&sidecar, &dir, &["init"])?;
+    let init_status = init.stdout(Stdio::null()).stderr(Stdio::null()).status();
+    match init_status {
+        Ok(code) if code.success() => {}
+        Ok(_) => return Err("初始化失败：无法写入数据目录".to_string()),
+        Err(e) => return Err(format!("初始化失败：{e}")),
+    }
+
+    // 首抓：快版热榜（后台运行；进度由 update-progress.json 反馈）。
+    spawn_command(embedded_command(&sidecar, &dir, &["task", "quick"])?)?;
+    Ok("已开始初始化（抓取热榜）".to_string())
+}
+
 /// 渐进导入开关（对应 macOS 版 scripts/import.sh start|pause）。
 /// on=true 时按范围启动/续传；on=false 时优雅暂停（断点保留）。
 #[tauri::command]
 fn import_switch(app: AppHandle, on: bool, years: Option<String>) -> Result<String, String> {
     let project_dir = project_dir_of(&app)?;
     let years = years.unwrap_or_else(|| "1".to_string());
+    if let Some((sidecar, dir)) = embedded_target(&project_dir) {
+        if on {
+            spawn_command(embedded_command(
+                &sidecar,
+                &dir,
+                &["import-recent", "--years", &years],
+            )?)?;
+            return Ok(format!("已开启渐进导入（{years}）"));
+        }
+        spawn_command(embedded_command(
+            &sidecar,
+            &dir,
+            &["import-recent", "--pause"],
+        )?)?;
+        return Ok("已暂停渐进导入".to_string());
+    }
     #[cfg(windows)]
     {
         if on {
@@ -376,6 +513,14 @@ fn import_switch(app: AppHandle, on: bool, years: Option<String>) -> Result<Stri
 #[tauri::command]
 fn cancel_import(app: AppHandle) -> Result<String, String> {
     let project_dir = project_dir_of(&app)?;
+    if let Some((sidecar, dir)) = embedded_target(&project_dir) {
+        spawn_command(embedded_command(
+            &sidecar,
+            &dir,
+            &["import-recent", "--cancel"],
+        )?)?;
+        return Ok("已取消导入任务".to_string());
+    }
     #[cfg(windows)]
     {
         spawn_python(
@@ -408,6 +553,14 @@ fn cancel_import(app: AppHandle) -> Result<String, String> {
 #[tauri::command]
 fn start_genre_import(app: AppHandle, genre: String, more: bool) -> Result<String, String> {
     let project_dir = project_dir_of(&app)?;
+    if let Some((sidecar, dir)) = embedded_target(&project_dir) {
+        let mut args: Vec<&str> = vec!["fetch-genre", &genre];
+        if more {
+            args.push("--more");
+        }
+        spawn_command(embedded_command(&sidecar, &dir, &args)?)?;
+        return Ok(format!("已启动分类 {genre} 抓取"));
+    }
     #[cfg(windows)]
     {
         let mut args: Vec<&str> = vec!["-m", "dlsite_tracker", "fetch-genre", &genre];
@@ -437,6 +590,10 @@ fn start_genre_import(app: AppHandle, genre: String, more: bool) -> Result<Strin
 #[tauri::command]
 fn watch_genre(app: AppHandle, genre: String) -> Result<String, String> {
     let project_dir = project_dir_of(&app)?;
+    if let Some((sidecar, dir)) = embedded_target(&project_dir) {
+        spawn_command(embedded_command(&sidecar, &dir, &["watch-genre", &genre])?)?;
+        return Ok(format!("已加入每日刷新：{genre}"));
+    }
     #[cfg(windows)]
     {
         spawn_python(
@@ -471,15 +628,24 @@ fn watch_genre(app: AppHandle, genre: String) -> Result<String, String> {
 #[tauri::command]
 fn start_update(app: AppHandle, kind: String, range: Option<String>) -> Result<String, String> {
     let project_dir = project_dir_of(&app)?;
+    let chain = match kind.as_str() {
+        "quick" => "quick",
+        "daily" => "daily",
+        "covers" => "covers",
+        "update-all" => "update-all",
+        _ => return Err(format!("未知任务类型：{kind}")),
+    };
+    if let Some((sidecar, dir)) = embedded_target(&project_dir) {
+        let mut command = embedded_command(&sidecar, &dir, &["task", chain])?;
+        if let Some(value) = range.as_deref().filter(|value| !value.is_empty()) {
+            command.arg(value);
+        }
+        spawn_command(command)?;
+        return Ok(format!("已启动 {chain}"));
+    }
 
     #[cfg(windows)]
     {
-        let chain = match kind.as_str() {
-            "quick" => "quick",
-            "daily" => "daily",
-            "update-all" => "update-all",
-            _ => return Err(format!("未知任务类型：{kind}")),
-        };
         let mut command = python_command(&project_dir, &["-m", "dlsite_tracker", "task", chain])?;
         if let Some(value) = range.as_deref().filter(|value| !value.is_empty()) {
             command.arg(value);
@@ -493,6 +659,7 @@ fn start_update(app: AppHandle, kind: String, range: Option<String>) -> Result<S
         let script = match kind.as_str() {
             "quick" => "quick-update.sh",
             "daily" => "daily.sh",
+            "covers" => "covers.sh",
             "update-all" => "update-all.sh",
             _ => return Err(format!("未知任务类型：{kind}")),
         };
@@ -523,6 +690,15 @@ fn start_update(app: AppHandle, kind: String, range: Option<String>) -> Result<S
 #[tauri::command]
 async fn run_export(app: AppHandle) -> Result<String, String> {
     let project_dir = project_dir_of(&app)?;
+    if let Some((sidecar, dir)) = embedded_target(&project_dir) {
+        let mut command = embedded_command(&sidecar, &dir, &["export"])?;
+        let status = command.stdout(Stdio::null()).stderr(Stdio::null()).status();
+        return match status {
+            Ok(code) if code.success() => Ok("ok".to_string()),
+            Ok(_) => Err("导出失败：详见 data/ 目录日志".to_string()),
+            Err(e) => Err(format!("导出失败：{e}")),
+        };
+    }
     #[cfg(windows)]
     {
         // 没装 Python（探测失败）按「非管道目录布局」处理：调用方直接重读文件即可。
@@ -558,30 +734,6 @@ async fn run_export(app: AppHandle) -> Result<String, String> {
 }
 
 /// 分类管理（unwatch=移出每日刷新；remove=移除分类与名次数据）。
-#[cfg(not(windows))]
-fn genre_admin(app: &AppHandle, action: &str, genre: &str) -> Result<String, String> {
-    let project_dir = project_dir_of(app)?;
-    let script = project_dir.join("scripts").join("genre-import.sh");
-    if !script.is_file() {
-        return Err(format!("未找到分类脚本：{}", script.display()));
-    }
-    let output = Command::new("/bin/bash")
-        .arg(&script)
-        .arg(action)
-        .arg(genre)
-        .current_dir(&project_dir)
-        .output()
-        .map_err(|e| format!("无法执行分类操作：{e}"))?;
-    if output.status.success() {
-        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
-    } else {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        Err(if stderr.is_empty() { stdout } else { stderr })
-    }
-}
-
-#[cfg(windows)]
 fn genre_admin(app: &AppHandle, action: &str, genre: &str) -> Result<String, String> {
     let project_dir = project_dir_of(app)?;
     let cli = match action {
@@ -589,10 +741,33 @@ fn genre_admin(app: &AppHandle, action: &str, genre: &str) -> Result<String, Str
         "remove" => "remove-genre",
         _ => return Err(format!("未知分类操作：{action}")),
     };
-    let mut command = python_command(&project_dir, &["-m", "dlsite_tracker", cli, genre])?;
-    let output = command
-        .output()
-        .map_err(|e| format!("无法执行分类操作：{e}"))?;
+    let output = if let Some((sidecar, dir)) = embedded_target(&project_dir) {
+        embedded_command(&sidecar, &dir, &[cli, genre])?
+            .output()
+            .map_err(|e| format!("无法执行分类操作：{e}"))?
+    } else {
+        #[cfg(windows)]
+        {
+            let mut command = python_command(&project_dir, &["-m", "dlsite_tracker", cli, genre])?;
+            command
+                .output()
+                .map_err(|e| format!("无法执行分类操作：{e}"))?
+        }
+        #[cfg(not(windows))]
+        {
+            let script = project_dir.join("scripts").join("genre-import.sh");
+            if !script.is_file() {
+                return Err(format!("未找到分类脚本：{}", script.display()));
+            }
+            Command::new("/bin/bash")
+                .arg(&script)
+                .arg(action)
+                .arg(genre)
+                .current_dir(&project_dir)
+                .output()
+                .map_err(|e| format!("无法执行分类操作：{e}"))?
+        }
+    };
     if output.status.success() {
         Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
     } else {
@@ -636,6 +811,7 @@ pub fn run() {
             load_library,
             save_library,
             read_progress_files,
+            data_file_stamp,
             start_update,
             import_switch,
             cancel_import,
@@ -643,7 +819,8 @@ pub fn run() {
             watch_genre,
             unwatch_genre,
             remove_genre,
-            run_export
+            run_export,
+            bootstrap_pipeline
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

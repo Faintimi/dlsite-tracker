@@ -8,6 +8,8 @@
     loadWorks,
     pickDataFile,
     runExport,
+    bootstrapPipeline,
+    dataFileStamp,
     type LoadedData,
     type WorkView,
   } from "$lib/api";
@@ -130,9 +132,11 @@
 
   let status = $state<Status>("empty");
   let errorMessage = $state("");
+  let initializing = $state(false);
   let data = $state<LoadedData | null>(null);
   let syncing = $state(false);
   let lastError = $state("");
+  let lastDataStamp = "";
   let loadedAt = $state("");
   let updateError = $state("");
 
@@ -463,27 +467,50 @@
   async function bootstrap() {
     try {
       const path = await getDataPath();
-      if (path) await reload();
+      if (path) {
+        await reload();
+        lastDataStamp = (await dataFileStamp()) ?? "";
+      }
     } catch (error) {
       status = "error";
       errorMessage = String(error);
     }
   }
 
-  async function reload() {
+  /** 首次使用：一键初始化内嵌管道（本机抓取热榜，约 5–10 分钟）。
+   *  进度与完成后刷新由 pollProgress（2 秒轮询）接管。 */
+  async function initPipeline() {
+    initializing = true;
+    try {
+      await bootstrapPipeline();
+      console.info("[radar] 已开始初始化（内嵌管道）");
+    } catch (error) {
+      initializing = false;
+      updateError = String(error);
+    }
+  }
+
+  async function reload(options: { quiet?: boolean; keepScroll?: boolean } = {}) {
     const hadData = data !== null;
-    if (!hadData) status = "loading";
-    errorMessage = "";
+    if (!options.quiet && !hadData) status = "loading";
+    if (!options.quiet) errorMessage = "";
     try {
       // 先让「加载中」渲染一帧，再做读文件与解析的重活
       await new Promise((resolve) => setTimeout(resolve, 0));
       data = await loadWorks();
       console.info(`[radar] 已加载 ${data.works.length} 件作品（${data.path}）`);
-      scrollTop = 0;
+      if (!options.keepScroll) {
+        scrollTop = 0;
+      }
       loadedAt = new Date().toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
       lastError = "";
       status = "ready";
     } catch (error) {
+      if (options.quiet) {
+        // 静默重载（数据可能正在写入）：不打断当前界面，下次轮询再试
+        console.warn("[radar] 静默重载失败：", error);
+        return;
+      }
       console.error("[radar] 数据加载失败：", error);
       if (hadData) {
         // 对齐 macOS：保留上次导入的作品，仅提示失败
@@ -603,13 +630,27 @@
 
   async function pollProgress() {
     try {
+      // 数据文件被更新（抓取中途导出 / 命令行导出）→ 静默重载并保持滚动位置
+      const stamp = await dataFileStamp().catch(() => null);
+      if (stamp && stamp !== lastDataStamp) {
+        lastDataStamp = stamp;
+        void reload({ quiet: true, keepScroll: true });
+      }
       const next = await readProgress();
       const state = next.state;
       if (state && (state.updated_ts ?? 0) !== lastProgressTs) {
         const previous = progress?.phase;
         lastProgressTs = state.updated_ts ?? 0;
         if (state.phase === "done" && previous && ACTIVE_PHASES.has(previous)) {
-          void reload(); // 更新完成 → 自动刷新数据
+          if (initializing) {
+            initializing = false;
+            // 首次初始化完成 → 先让用户能浏览，随后台自动接封面任务
+            void startUpdate("covers").catch(() => {});
+          }
+          void reload({ keepScroll: true }); // 更新完成 → 自动刷新数据（保持浏览位置）
+        } else if (state.phase === "failed" && initializing) {
+          initializing = false;
+          updateError = state.detail || "初始化失败；详见数据目录日志";
         }
       }
       progress = state;
@@ -617,7 +658,7 @@
       if (imported) {
         const phase = imported.phase ?? "";
         if (phase === "done" && lastImportPhase === "enrich") {
-          void reload(); // 渐进导入完成 → 自动刷新
+          void reload({ keepScroll: true }); // 渐进导入完成 → 自动刷新
         }
         lastImportPhase = phase;
       }
@@ -625,7 +666,7 @@
       const genre = next.genreProgress;
       if (genre && genre.done && !isStale(genre.updated_ts, 6) && (genre.updated_ts ?? 0) !== lastGenreDoneTs) {
         if (lastGenreDoneTs !== 0 || genreInfo !== null) {
-          void reload(); // 分类抓取完成 → 自动刷新
+          void reload({ keepScroll: true }); // 分类抓取完成 → 自动刷新
           const id = genre.genre_id ?? "";
           const name = genre.genre_name ?? genreNameById(id);
           if (id) joinDailyRequest = { id, name };
@@ -1154,11 +1195,23 @@
     {:else}
       <div class="center">
         <h1>同人游戏雷达 · Doujin Game Radar</h1>
-        <p>未自动找到数据文件；请选择由数据管道导出的 <code>works.json</code></p>
-        <p class="hint">
-          启动时会自动查找常见位置（本地仓库的 <code>out/works.json</code>）；封面在其旁边的 <code>covers/</code> 目录，数据全部留在本机
-        </p>
-        <button class="btn primary" onclick={pick}>选择数据文件</button>
+        {#if initializing}
+          <p>正在初始化数据…</p>
+          <p class="hint">
+            {progress?.detail || "首次抓取热榜约 5–10 分钟（视网络）；全部在本机进行，不会上传"}
+          </p>
+        {:else}
+          <p>
+            还没有数据。首次使用可一键初始化：应用会在本机抓取 DLsite 热榜（约 5–10 分钟，视网络），无需安装 Python。
+          </p>
+          <p class="hint">
+            已有数据文件？选择数据管道导出的 <code>works.json</code> 即可（封面在旁边的 <code>covers/</code>）；本地仓库的 <code>out/works.json</code> 启动时会自动查找
+          </p>
+          <button class="btn primary with-icon" onclick={() => void initPipeline()}>
+            {@html ICONS.tray}初始化数据（抓取热榜）
+          </button>
+          <button class="btn" onclick={pick}>选择数据文件</button>
+        {/if}
       </div>
     {/if}
   </div>

@@ -44,9 +44,10 @@ except ImportError:  # pragma: no cover
 
 from .discovery import catalog_page_url, extract_catalog_items, extract_sales
 from .enrich import enrich_one
-from .export import fetch_records, write_export
+from .export import export_snapshot
 from .http import HttpError
 from .images import download_covers, download_entries, list_missing_covers
+from .progress import write_task_progress
 from .sales import fetch_product_info, save_sales
 from .store import Store
 
@@ -66,6 +67,7 @@ def pause_requested(cfg) -> bool:
 BATCH_ROWS = 80  # 每批从队列取多少件（P13：与 info/ajax 批量对齐，80 件/请求）
 PRINT_EVERY = 25  # 终端进度打印频率
 PROGRESS_EVERY = 10  # 进度文件写入频率（每 N 件；DB 计数仍逐件落盘）
+EXPORT_EVERY = 200  # 周期导出频率（每 N 件；应用可边导入边看到新增作品）
 
 SOURCE_CATALOG = "catalog"  # P18：候选来源 = 游戏目录遍历（新任务默认）
 SOURCE_NUMBERS = "numbers"  # 旧编号扫描（保留为审计工具：--source numbers）
@@ -460,40 +462,35 @@ def write_progress(
     """把任务进度原子写入 out/import-progress.json（供应用显示横幅）。"""
     if job is None:
         return
-    path = Path(cfg.out_dir) / "import-progress.json"
     enriched = int(job["enriched"])
     excluded = int(job["excluded"])
     skipped = int(job["skipped"])
     failed = int(job["failed"])
-    payload = {
-        "schema_version": PROGRESS_SCHEMA_VERSION,
-        "updated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
-        "updated_ts": int(time.time()),
-        "pid": os.getpid(),
-        "running": bool(running),
-        "phase": job["phase"],
-        "years": str(job["years"]),
-        "source": str(job.get("source") or SOURCE_NUMBERS),
-        "walk_done": bool(int(job.get("walk_done") or 0)),
-        "cursor_page": int(job.get("cursor_page") or 0),
-        "boundaries": {
-            "old": int(job["boundary_old"]),
-            "modern": int(job["boundary_modern"]),
+    write_task_progress(
+        Path(cfg.out_dir) / "import-progress.json",
+        str(job["phase"]),
+        years=str(job["years"]),
+        schema_version=PROGRESS_SCHEMA_VERSION,
+        extra={
+            "running": bool(running),
+            "source": str(job.get("source") or SOURCE_NUMBERS),
+            "walk_done": bool(int(job.get("walk_done") or 0)),
+            "cursor_page": int(job.get("cursor_page") or 0),
+            "boundaries": {
+                "old": int(job["boundary_old"]),
+                "modern": int(job["boundary_modern"]),
+            },
+            "min_sales": int(job["min_sales"]),
+            "fresh_days": int(job["fresh_days"]),
+            "enriched": enriched,
+            "excluded": excluded,
+            "skipped": skipped,
+            "failed": failed,
+            "remaining": int(remaining),
+            "total": enriched + excluded + skipped + failed + int(remaining),
+            "note": note,
         },
-        "min_sales": int(job["min_sales"]),
-        "fresh_days": int(job["fresh_days"]),
-        "enriched": enriched,
-        "excluded": excluded,
-        "skipped": skipped,
-        "failed": failed,
-        "remaining": int(remaining),
-        "total": enriched + excluded + skipped + failed + int(remaining),
-        "note": note,
-    }
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    os.replace(tmp, path)
+    )
 
 
 def run_catalog_walk(
@@ -817,6 +814,10 @@ def run_import(
                 processed = sum(session.values())
                 if processed % PROGRESS_EVERY == 0:
                     write_progress(cfg, job, remaining, running=True, note="")
+                if processed % EXPORT_EVERY == 0:
+                    snapshot = export_snapshot(cfg, store, f"导入进行中（已处理 {processed}）")
+                    if snapshot:
+                        print(f"[导出] 中途快照：{snapshot}", flush=True)
                 if processed % PRINT_EVERY == 0:
                     print(
                         f"[导入] 入库 {session['enriched']} · 排除非游戏 {session['excluded']} "
@@ -855,14 +856,9 @@ def run_import(
         note = "本轮结束（可续传）"
     if done:
         # P15：导入完成自动导出（应用闭环；失败不影响导入）
-        try:
-            work_types = list(getattr(cfg, "default_work_types", []) or []) or None
-            records = fetch_records(store, cfg.out_dir, work_types=work_types)
-            write_export(cfg.out_dir, records)
-            covered = sum(1 for record in records if record["image_path"])
-            print(f"[导出] 导入完成，已自动导出 {len(records)} 条（含封面 {covered}）", flush=True)
-        except OSError as exc:
-            LOG.warning("自动导出失败（不影响导入；可手动 export）：%s", exc)
+        snapshot = export_snapshot(cfg, store, "导入完成")
+        if snapshot:
+            print(f"[导出] 导入完成，已自动导出 {snapshot}", flush=True)
     store.update_import_job(phase="done" if done else "enrich", note=note)
     job = store.get_import_job()
     write_progress(cfg, job, remaining, running=False, note=note)

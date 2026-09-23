@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from .http import Fetcher, HttpError
 from .sales import parse_options, sync_sales
@@ -179,6 +179,7 @@ def enrich_pending(
     hot_only: bool = False,
     source_prefix: Optional[str] = None,
     source: Optional[str] = None,
+    observer: Optional[Callable[[int, int], None]] = None,
 ) -> Dict[str, int]:
     """处理待富化队列（每作品一次 API 请求，失败计入 attempts，连续失败会中止）。
 
@@ -186,6 +187,7 @@ def enrich_pending(
       P20 起跳过已富化——热榜只负责把未入库的新上榜作品带进来）
     - source_prefix：仅处理指定来源前缀的队列项（如 refresh: 语言/数据刷新，P8）
     - source：仅处理「来源完整匹配」的队列项（P19.2 现导入定向富化；自动跳过已富化）
+    - observer：每 50 部回调一次（order, total），供调用方写进度 / 快照导出
     """
     if source:
         batch = store.pending_batch_exact_source(limit, source)
@@ -216,6 +218,8 @@ def enrich_pending(
             enriched_worknos.append(workno)
         if order % 50 == 0:
             LOG.info("富化进行中：%d/%d（成功 %d 失败 %d）", order, len(batch), ok, fail)
+            if observer is not None:
+                observer(order, len(batch))
     if enriched_worknos:
         # P11：顺带批量补记销量/收藏（info/ajax，40 件/请求；失败不影响富化结果）
         try:

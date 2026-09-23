@@ -20,6 +20,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
+from .config import split_list
 from .store import Store
 
 LOG = logging.getLogger("dlsite_tracker.export")
@@ -239,3 +240,38 @@ def write_export(
     _atomic_write_text(json_path, json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
     _atomic_write_text(csv_path, _render_csv(records))
     return {"json": str(json_path), "csv": str(csv_path)}
+
+
+def export_current(
+    cfg: Any, store: Store, work_types: Optional[Sequence[str]] = None
+) -> str:
+    """按当前配置导出全部产物（含分类 / 目录 / 人气序元信息）；返回导出注记。"""
+    if work_types is None:
+        work_types = list(getattr(cfg, "default_work_types", []) or []) or None
+    records = fetch_records(store, cfg.out_dir, work_types=work_types)
+    watched = set(split_list(getattr(cfg, "genre_rank_ids", "") or ""))
+    genres = store.genre_summaries()
+    for item in genres:
+        item["watched"] = item["id"] in watched
+    sites = list(getattr(cfg, "sites", []) or [])
+    trend_seen = store.get_meta(f"trend_seen:{sites[0]}") if sites else None
+    write_export(
+        cfg.out_dir,
+        records,
+        genres=genres,
+        genre_catalog=store.list_genre_catalog(),
+        trend={"depth": store.rank_trend_depth(), "seen_at": trend_seen},
+    )
+    covered = sum(1 for record in records if record["image_path"])
+    return f"{len(records)} 条（含封面 {covered}）"
+
+
+def export_snapshot(cfg: Any, store: Store, reason: str) -> Optional[str]:
+    """抓取途中的安全快照导出（失败只记日志、不中断流程）；返回导出注记。"""
+    try:
+        note = export_current(cfg, store)
+    except Exception as exc:  # noqa: BLE001 - 快照属尽力而为，绝不影响主流程
+        LOG.warning("自动导出失败（不影响流程；可手动 export）：%s", exc)
+        return None
+    LOG.info("[导出] %s：已导出 %s", reason, note)
+    return note

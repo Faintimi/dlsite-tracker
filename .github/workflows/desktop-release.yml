@@ -9,6 +9,9 @@ on:
     tags: ["desktop-v*"]
     paths:
       - "desktop/**"
+      - "dlsite_tracker/**"
+      - "packaging/**"
+      - "scripts/build-sidecar.sh"
       - ".github/workflows/desktop-release.yml"
 
 permissions:
@@ -50,6 +53,11 @@ jobs:
       - name: Type check
         run: npm run check
 
+      - name: Build embedded pipeline (sidecar)
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        run: bash scripts/build-sidecar.sh
+
       - name: Build installer (NSIS)
         run: npm run tauri build -- --bundles nsis
 
@@ -90,6 +98,11 @@ jobs:
 
       - name: Type check
         run: npm run check
+
+      - name: Build embedded pipeline (sidecar)
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        run: bash scripts/build-sidecar.sh
 
       - name: Build app bundle
         run: npm run tauri build -- --bundles app

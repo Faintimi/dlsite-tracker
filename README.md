@@ -60,13 +60,14 @@ bash scripts/install-schedule.sh          # 每日 23:30 自动维护（launchd�
 - **自行构建**（macOS / Windows 均可）：
 
 ```bash
+bash scripts/build-sidecar.sh   # 先生成内嵌管道（打包前必须执行一次）
 cd desktop
 npm install
 npm run tauri build        # 产物：src-tauri/target/release/bundle/（macOS：.app/.dmg；Windows：NSIS）
 ```
 
-- 首次打开：点**「打开数据文件…」**选择管道导出的 `out/works.json`；之后启动自动加载
-- **「更新数据 ▾」**：立即更新热榜（快）/ 完整维护 / 继续抓更早（续深）/ 导入最近 N 年；顶部横幅实时显示进度，完成后列表自动刷新（需本机 Python ≥ 3.9 + 本仓库管道）
+- 首次打开：点**「初始化数据」**一键搭建（内置数据管道，本机抓取热榜约 5–10 分钟、视网络，无需安装 Python）；已有数据文件时可用「选择数据文件」直接打开管道导出的 `out/works.json`
+- **「更新数据 ▾」**：立即更新热榜（快）/ 完整维护 / 继续抓更早（续深）/ 导入最近 N 年；顶部横幅实时显示进度，完成后列表自动刷新（打包版用内置管道，无额外依赖）
 - 功能：筛选（分类交集 / 年份 / 销量 / 价格 / 评分 / 收藏 / 关注作者）、排序、五种视图、悬停详情卡、收藏夹与右键菜单
 - 说明见 [`desktop/README.md`](desktop/README.md) / [`desktop/README_EN.md`](desktop/README_EN.md)
 
