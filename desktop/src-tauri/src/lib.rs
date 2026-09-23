@@ -99,7 +99,9 @@ fn get_data_path(app: AppHandle) -> Option<String> {
     }
     if let Err(e) = write_settings(
         &app,
-        &Settings { data_path: Some(path.clone()) },
+        &Settings {
+            data_path: Some(path.clone()),
+        },
     ) {
         eprintln!("[radar] 自动绑定保存设置失败：{e}");
     }
@@ -126,7 +128,9 @@ async fn pick_data_file(app: AppHandle) -> Result<Option<String>, String> {
     allow_data_dir(&app, &path)?;
     write_settings(
         &app,
-        &Settings { data_path: Some(path.to_string_lossy().into_owned()) },
+        &Settings {
+            data_path: Some(path.to_string_lossy().into_owned()),
+        },
     )?;
     Ok(Some(path.to_string_lossy().into_owned()))
 }
@@ -213,20 +217,111 @@ fn project_dir_of(app: &AppHandle) -> Result<PathBuf, String> {
         .ok_or_else(|| "无法确定项目目录（out 的上一级）".to_string())
 }
 
-/// 后台启动一个管道子进程（stdout/stderr 丢弃，线程回收退出码）。
-fn spawn_pipeline(project_dir: &Path, program: &str, args: &[&str]) -> Result<(), String> {
-    let mut command = Command::new(program);
-    command
-        .args(args)
-        .current_dir(project_dir)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
+/// 后台启动一个已配置好的子进程（stdout/stderr 丢弃，线程回收退出码）。
+fn spawn_command(mut command: Command) -> Result<(), String> {
+    command.stdout(Stdio::null()).stderr(Stdio::null());
     let child = command.spawn().map_err(|e| format!("无法启动任务：{e}"))?;
     std::thread::spawn(move || {
         let mut child = child;
         let _ = child.wait();
     });
     Ok(())
+}
+
+/// 后台启动一个 bash 管道子进程（macOS / Linux；脚本自带 python3 回退）。
+#[cfg(not(windows))]
+fn spawn_pipeline(project_dir: &Path, program: &str, args: &[&str]) -> Result<(), String> {
+    let mut command = Command::new(program);
+    command.args(args).current_dir(project_dir);
+    spawn_command(command)
+}
+
+/// Windows：探测可用的 Python 解释器（依次尝试 `python` → `python3` → `py -3`）。
+///
+/// 用 `-c` 打印版本号而不是直接 spawn 目标命令：Microsoft Store 的占位别名在重定向
+/// 标准流下会报错退出（不会误判为可用），版本低于 3.9 时也能给出更准确的提示。
+/// 结果缓存；用户装好 Python 后重启应用即重新探测。
+#[cfg(windows)]
+#[derive(Clone)]
+struct PythonInterp {
+    program: String,
+    prefix: Vec<String>,
+}
+
+#[cfg(windows)]
+static PYTHON: std::sync::OnceLock<Result<PythonInterp, String>> = std::sync::OnceLock::new();
+
+#[cfg(windows)]
+fn parse_major_minor(raw: &str) -> Option<(u32, u32)> {
+    raw.lines().find_map(|line| {
+        let (major, minor) = line.trim().split_once('.')?;
+        Some((major.parse().ok()?, minor.parse().ok()?))
+    })
+}
+
+#[cfg(windows)]
+fn probe_python(program: &str, prefix: &[&str]) -> Option<(u32, u32)> {
+    let output = Command::new(program)
+        .args(prefix)
+        .arg("-c")
+        .arg("import sys; print('%d.%d' % (sys.version_info[0], sys.version_info[1]))")
+        .stdin(Stdio::null())
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    parse_major_minor(&String::from_utf8_lossy(&output.stdout))
+}
+
+#[cfg(windows)]
+fn resolve_python_uncached() -> Result<PythonInterp, String> {
+    let candidates: [(&str, &[&str]); 3] = [("python", &[]), ("python3", &[]), ("py", &["-3"])];
+    let mut newest_old: Option<(u32, u32)> = None;
+    for (program, prefix) in candidates {
+        let Some(version) = probe_python(program, prefix) else {
+            continue;
+        };
+        if version >= (3, 9) {
+            return Ok(PythonInterp {
+                program: program.to_string(),
+                prefix: prefix.iter().map(|arg| (*arg).to_string()).collect(),
+            });
+        }
+        if newest_old.map(|old| version > old).unwrap_or(true) {
+            newest_old = Some(version);
+        }
+    }
+    Err(match newest_old {
+        Some((major, minor)) => {
+            format!("本机 Python 版本过低（{major}.{minor}），需要 3.9+。请升级 Python 后重启应用。")
+        }
+        None => "未找到可用的 Python。请安装 Python 3.9+（安装时勾选 “Add python.exe to PATH”），装好后重启应用。"
+            .to_string(),
+    })
+}
+
+#[cfg(windows)]
+fn resolve_python() -> Result<PythonInterp, String> {
+    PYTHON.get_or_init(resolve_python_uncached).clone()
+}
+
+/// Windows：组装调用 dlsite_tracker 管道的 Python 命令（解释器 / 参数 / 工作目录）。
+#[cfg(windows)]
+fn python_command(project_dir: &Path, args: &[&str]) -> Result<Command, String> {
+    let interp = resolve_python()?;
+    let mut command = Command::new(&interp.program);
+    command
+        .args(&interp.prefix)
+        .args(args)
+        .current_dir(project_dir);
+    Ok(command)
+}
+
+/// Windows：后台启动 Python 管道任务。
+#[cfg(windows)]
+fn spawn_python(project_dir: &Path, args: &[&str]) -> Result<(), String> {
+    spawn_command(python_command(project_dir, args)?)
 }
 
 /// 渐进导入开关（对应 macOS 版 scripts/import.sh start|pause）。
@@ -238,16 +333,14 @@ fn import_switch(app: AppHandle, on: bool, years: Option<String>) -> Result<Stri
     #[cfg(windows)]
     {
         if on {
-            spawn_pipeline(
+            spawn_python(
                 &project_dir,
-                "python",
                 &["-m", "dlsite_tracker", "import-recent", "--years", &years],
             )?;
             Ok(format!("已开启渐进导入（{years}）"))
         } else {
-            spawn_pipeline(
+            spawn_python(
                 &project_dir,
-                "python",
                 &["-m", "dlsite_tracker", "import-recent", "--pause"],
             )?;
             Ok("已暂停渐进导入".to_string())
@@ -285,9 +378,8 @@ fn cancel_import(app: AppHandle) -> Result<String, String> {
     let project_dir = project_dir_of(&app)?;
     #[cfg(windows)]
     {
-        spawn_pipeline(
+        spawn_python(
             &project_dir,
-            "python",
             &["-m", "dlsite_tracker", "import-recent", "--cancel"],
         )?;
         Ok("已取消导入任务".to_string())
@@ -322,7 +414,7 @@ fn start_genre_import(app: AppHandle, genre: String, more: bool) -> Result<Strin
         if more {
             args.push("--more");
         }
-        spawn_pipeline(&project_dir, "python", &args)?;
+        spawn_python(&project_dir, &args)?;
         Ok(format!("已启动分类 {genre} 抓取"))
     }
     #[cfg(not(windows))]
@@ -347,9 +439,8 @@ fn watch_genre(app: AppHandle, genre: String) -> Result<String, String> {
     let project_dir = project_dir_of(&app)?;
     #[cfg(windows)]
     {
-        spawn_pipeline(
+        spawn_python(
             &project_dir,
-            "python",
             &["-m", "dlsite_tracker", "watch-genre", &genre],
         )?;
         Ok(format!("已加入每日刷新：{genre}"))
@@ -389,20 +480,11 @@ fn start_update(app: AppHandle, kind: String, range: Option<String>) -> Result<S
             "update-all" => "update-all",
             _ => return Err(format!("未知任务类型：{kind}")),
         };
-        let mut command = Command::new("python");
-        command.arg("-m").arg("dlsite_tracker").arg("task").arg(chain);
+        let mut command = python_command(&project_dir, &["-m", "dlsite_tracker", "task", chain])?;
         if let Some(value) = range.as_deref().filter(|value| !value.is_empty()) {
             command.arg(value);
         }
-        command
-            .current_dir(project_dir)
-            .stdout(Stdio::null())
-            .stderr(Stdio::null());
-        let child = command.spawn().map_err(|e| format!("无法启动更新：{e}"))?;
-        std::thread::spawn(move || {
-            let mut child = child;
-            let _ = child.wait();
-        });
+        spawn_command(command)?;
         Ok(format!("已启动 {chain}"))
     }
 
@@ -443,12 +525,12 @@ async fn run_export(app: AppHandle) -> Result<String, String> {
     let project_dir = project_dir_of(&app)?;
     #[cfg(windows)]
     {
-        let status = Command::new("python")
-            .args(["-m", "dlsite_tracker", "export"])
-            .current_dir(&project_dir)
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
+        // 没装 Python（探测失败）按「非管道目录布局」处理：调用方直接重读文件即可。
+        let Ok(mut command) = python_command(&project_dir, &["-m", "dlsite_tracker", "export"])
+        else {
+            return Ok("no-export".to_string());
+        };
+        let status = command.stdout(Stdio::null()).stderr(Stdio::null()).status();
         match status {
             Ok(code) if code.success() => Ok("ok".to_string()),
             Ok(_) => Err("导出失败：详见 data/ 目录日志".to_string()),
@@ -507,9 +589,8 @@ fn genre_admin(app: &AppHandle, action: &str, genre: &str) -> Result<String, Str
         "remove" => "remove-genre",
         _ => return Err(format!("未知分类操作：{action}")),
     };
-    let output = Command::new("python")
-        .args(["-m", "dlsite_tracker", cli, genre])
-        .current_dir(&project_dir)
+    let mut command = python_command(&project_dir, &["-m", "dlsite_tracker", cli, genre])?;
+    let output = command
         .output()
         .map_err(|e| format!("无法执行分类操作：{e}"))?;
     if output.status.success() {
