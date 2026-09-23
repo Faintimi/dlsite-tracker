@@ -1,7 +1,11 @@
 <script lang="ts">
   import type { WorkView } from "$lib/api";
+  import { makerKeyOf } from "$lib/filter";
+  import { library } from "$lib/library.svelte";
 
   let { work, x, y }: { work: WorkView; x: number; y: number } = $props();
+
+  const makerKey = $derived(makerKeyOf(work.maker, work.maker_id));
 
   const WIDTH = 340;
   const HEIGHT = 300;
@@ -48,6 +52,12 @@
 <div class="hover-card" style="left: {left}px; top: {top}px; width: {WIDTH}px">
   <div class="hc-title">{work.title}</div>
   <div class="hc-sub">{work.maker} · {work.id}</div>
+  {#if library.isFavorited(work.id) || library.isFollowing(makerKey)}
+    <div class="hc-flags">
+      {#if library.isFavorited(work.id)}<span>♥ 已收藏</span>{/if}
+      {#if library.isFollowing(makerKey)}<span>★ 已关注作者</span>{/if}
+    </div>
+  {/if}
   <div class="hc-line">
     <span>销量 {fmtNum(work.sales)}</span>
     <span>★ {fmtRating(work.rating)}（{fmtNum(work.rating_count)} 评）</span>
@@ -124,5 +134,12 @@
     font-size: 11px;
     color: var(--accent);
     margin-top: 2px;
+  }
+
+  .hc-flags {
+    display: flex;
+    gap: 10px;
+    font-size: 11px;
+    color: var(--accent);
   }
 </style>

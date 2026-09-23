@@ -90,6 +90,33 @@ fn load_works(app: AppHandle) -> Result<String, String> {
     }
 }
 
+/// 收藏 / 关注数据文件（应用配置目录下 favorites.json；与 macOS 版同构便于迁移）。
+fn library_file(app: &AppHandle) -> Result<PathBuf, String> {
+    let dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
+    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    Ok(dir.join("favorites.json"))
+}
+
+/// 读取收藏数据原文（不存在返回 null，由前端建默认结构）。
+#[tauri::command]
+fn load_library(app: AppHandle) -> Result<Option<String>, String> {
+    let path = library_file(&app)?;
+    match fs::read_to_string(&path) {
+        Ok(raw) => Ok(Some(raw)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(format!("读取 {} 失败：{e}", path.display())),
+    }
+}
+
+/// 原子保存收藏数据（先写临时文件再改名，失败不破坏旧档）。
+#[tauri::command]
+fn save_library(app: AppHandle, data: String) -> Result<(), String> {
+    let path = library_file(&app)?;
+    let tmp = path.with_extension("json.tmp");
+    fs::write(&tmp, data).map_err(|e| e.to_string())?;
+    fs::rename(&tmp, &path).map_err(|e| e.to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -108,7 +135,9 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_data_path,
             pick_data_file,
-            load_works
+            load_works,
+            load_library,
+            save_library
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -12,6 +12,7 @@
     activeFilterCount,
     applyFilters,
     emptyFilter,
+    makerKeyOf,
     SORT_OPTIONS,
     yearOf,
     type FilterState,
@@ -19,6 +20,8 @@
   } from "$lib/filter";
   import FilterPanel from "$lib/FilterPanel.svelte";
   import HoverCard from "$lib/HoverCard.svelte";
+  import ContextMenu from "$lib/ContextMenu.svelte";
+  import { DEFAULT_COLLECTION_NAME, library } from "$lib/library.svelte";
 
   type Status = "empty" | "loading" | "ready" | "error";
   type ViewMode = "grid" | "wall" | "info" | "compact" | "strip";
@@ -49,6 +52,8 @@
   let sort = $state<SortKey>("sales");
   let filter = $state<FilterState>(emptyFilter());
   let showFilters = $state(false);
+  // 右键菜单（作品上下文操作）
+  let menu = $state<{ x: number; y: number; work: WorkView } | null>(null);
 
   let scroller: HTMLDivElement | null = $state(null);
   let viewportW = $state(1200);
@@ -63,7 +68,9 @@
   let barWork = $state<WorkView | null>(null);
 
   const works = $derived(data?.works ?? []);
-  const filtered = $derived(applyFilters(works, filter, sort));
+  const favoriteIds = $derived(library.idsIn(filter.collectionId));
+  const followedKeys = $derived(library.followedKeys());
+  const filtered = $derived(applyFilters(works, filter, sort, { favoriteIds, followedKeys }));
   const barTarget = $derived(barWork ?? filtered[0] ?? null);
   const years = $derived.by(() => {
     const set = new Set<number>();
@@ -106,6 +113,41 @@
       ? new Date(data.file.generated_at).toLocaleString("zh-CN", { hour12: false })
       : "",
   );
+  // 右键菜单项（收藏 / 收藏夹 / 关注作者 / 打开链接）
+  const menuItems = $derived.by(() => {
+    const target = menu?.work;
+    const items: { label: string; action: () => void; danger?: boolean }[] = [];
+    if (!target) return items;
+    const key = makerKeyOf(target.maker, target.maker_id);
+    const favorited = library.isFavorited(target.id);
+    items.push({
+      label: favorited ? "取消收藏（我的收藏）" : `收藏到「${DEFAULT_COLLECTION_NAME}」`,
+      action: () => library.toggleFavorite(target.id),
+    });
+    for (const collection of library.data.collections) {
+      if (collection.name === DEFAULT_COLLECTION_NAME) continue;
+      const inside = collection.work_ids.includes(target.id);
+      items.push({
+        label: inside ? `从「${collection.name}」移除` : `加入「${collection.name}」`,
+        action: () => library.toggleIn(target.id, collection.id),
+      });
+    }
+    items.push({
+      label: "新建收藏夹并加入…",
+      action: () => {
+        const name = window.prompt("新建收藏夹名称：", "新收藏夹");
+        if (name !== null) library.createCollection(name, target.id);
+      },
+    });
+    items.push({
+      label: library.isFollowing(key)
+        ? `取消关注「${target.maker}」`
+        : `关注作者「${target.maker}」`,
+      action: () => library.toggleFollow(key, target.maker, target.maker_id ?? ""),
+    });
+    items.push({ label: "打开 DLsite 页面", action: () => openWork(target.url) });
+    return items;
+  });
 
   $effect(() => {
     const el = scroller;
@@ -129,15 +171,20 @@
     void filter.salesMin;
     void filter.priceMax;
     void filter.ratingMin;
+    void filter.fav;
+    void filter.collectionId;
+    void filter.followed;
     void sort;
     void view;
     hideHover();
     barWork = null;
+    menu = null;
     scroller?.scrollTo({ top: 0 });
     scrollTop = 0;
   });
 
   onMount(() => {
+    void library.load();
     void bootstrap();
   });
 
@@ -181,10 +228,18 @@
   function onScroll(event: Event) {
     scrollTop = (event.currentTarget as HTMLDivElement).scrollTop;
     hideHover();
+    menu = null;
   }
 
   function openWork(url: string) {
     if (url) void openUrl(url);
+  }
+
+  function openMenu(work: WorkView, event: MouseEvent) {
+    event.preventDefault();
+    event.stopPropagation();
+    hideHover();
+    menu = { x: event.clientX, y: event.clientY, work };
   }
 
   function enterHover(work: WorkView, event: MouseEvent) {
@@ -292,9 +347,31 @@
                 <button
                   class="card {view}"
                   onclick={() => openWork(w.url)}
+                  oncontextmenu={(event) => openMenu(w, event)}
                   onmouseenter={(event) => enterHover(w, event)}
                   onmouseleave={leaveHover}
                 >
+                  <span
+                    class="fav-btn"
+                    class:on={library.isFavorited(w.id)}
+                    role="button"
+                    tabindex="-1"
+                    title={library.isFavorited(w.id) ? "取消收藏" : "收藏到「我的收藏」"}
+                    onclick={(event) => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      library.toggleFavorite(w.id);
+                    }}
+                    onkeydown={(event) => {
+                      if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        library.toggleFavorite(w.id);
+                      }
+                    }}
+                  >
+                    {library.isFavorited(w.id) ? "♥" : "♡"}
+                  </span>
                   <div class="cover">
                     {#if w._cover}
                       <img src={w._cover} alt="" loading="lazy" decoding="async" />
@@ -318,6 +395,7 @@
                 <button
                   class="row-item compact"
                   onclick={() => openWork(w.url)}
+                  oncontextmenu={(event) => openMenu(w, event)}
                   onmouseenter={(event) => enterHover(w, event)}
                   onmouseleave={leaveHover}
                 >
@@ -332,11 +410,33 @@
                   <div class="row-num">★ {fmtRating(w.rating)}</div>
                   <div class="row-num price">{fmtPrice(w)}</div>
                   <div class="row-date">{fmtDate(w)}</div>
+                  <span
+                    class="fav-btn inline"
+                    class:on={library.isFavorited(w.id)}
+                    role="button"
+                    tabindex="-1"
+                    title={library.isFavorited(w.id) ? "取消收藏" : "收藏到「我的收藏」"}
+                    onclick={(event) => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      library.toggleFavorite(w.id);
+                    }}
+                    onkeydown={(event) => {
+                      if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        library.toggleFavorite(w.id);
+                      }
+                    }}
+                  >
+                    {library.isFavorited(w.id) ? "♥" : "♡"}
+                  </span>
                 </button>
               {:else}
                 <button
                   class="row-item strip"
                   onclick={() => openWork(w.url)}
+                  oncontextmenu={(event) => openMenu(w, event)}
                   onmouseenter={(event) => enterHover(w, event)}
                   onmouseleave={leaveHover}
                 >
@@ -354,6 +454,27 @@
                       <span>{fmtDate(w)}</span>
                     </div>
                   </div>
+                  <span
+                    class="fav-btn inline"
+                    class:on={library.isFavorited(w.id)}
+                    role="button"
+                    tabindex="-1"
+                    title={library.isFavorited(w.id) ? "取消收藏" : "收藏到「我的收藏」"}
+                    onclick={(event) => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      library.toggleFavorite(w.id);
+                    }}
+                    onkeydown={(event) => {
+                      if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        library.toggleFavorite(w.id);
+                      }
+                    }}
+                  >
+                    {library.isFavorited(w.id) ? "♥" : "♡"}
+                  </span>
                 </button>
               {/if}
             {/each}
@@ -408,6 +529,10 @@
 
 {#if hoverWork}
   <HoverCard work={hoverWork} x={hoverX} y={hoverY} />
+{/if}
+
+{#if menu}
+  <ContextMenu x={menu.x} y={menu.y} items={menuItems} onclose={() => (menu = null)} />
 {/if}
 
 <style>
@@ -476,6 +601,7 @@
   }
 
   .card {
+    position: relative;
     width: 172px;
     height: 314px;
     padding: 0;
@@ -851,5 +977,64 @@
     line-height: 16px;
     max-height: 32px;
     overflow: hidden;
+  }
+
+  /* ===== 收藏心形 ===== */
+  .fav-btn {
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    width: 26px;
+    height: 26px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 50%;
+    background: rgb(0 0 0 / 45%);
+    color: #fff;
+    font-size: 14px;
+    line-height: 1;
+    cursor: pointer;
+    opacity: 0;
+    transition:
+      opacity 0.12s ease,
+      background 0.12s ease;
+    z-index: 2;
+  }
+
+  .card:hover .fav-btn {
+    opacity: 1;
+  }
+
+  .fav-btn.on {
+    opacity: 1;
+    color: #ff5d73;
+    background: rgb(0 0 0 / 55%);
+  }
+
+  .fav-btn:hover {
+    background: rgb(0 0 0 / 65%);
+  }
+
+  .fav-btn.inline {
+    position: static;
+    flex: none;
+    width: 28px;
+    height: 28px;
+    margin-right: 10px;
+    background: transparent;
+    color: var(--muted);
+    opacity: 1;
+    border: 1px solid transparent;
+  }
+
+  .fav-btn.inline:hover {
+    border-color: var(--border);
+    background: transparent;
+  }
+
+  .fav-btn.inline.on {
+    color: #ff5d73;
+    background: transparent;
   }
 </style>

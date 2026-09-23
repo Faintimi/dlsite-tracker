@@ -15,6 +15,12 @@ export interface FilterState {
   priceMax: number | undefined;
   /** 评分下限（0 = 不限） */
   ratingMin: number;
+  /** 收藏筛选：all=不限 / yes=仅已收藏 / no=仅未收藏 */
+  fav: "all" | "yes" | "no";
+  /** 收藏夹范围：all=全部收藏夹 / 收藏夹 id */
+  collectionId: string;
+  /** 作者筛选：all=不限 / yes=仅已关注 */
+  followed: "all" | "yes";
 }
 
 export type SortKey =
@@ -45,6 +51,9 @@ export function emptyFilter(): FilterState {
     salesMin: undefined,
     priceMax: undefined,
     ratingMin: 0,
+    fav: "all",
+    collectionId: "all",
+    followed: "all",
   };
 }
 
@@ -57,7 +66,15 @@ export function activeFilterCount(f: FilterState): number {
   if (typeof f.salesMin === "number" && !Number.isNaN(f.salesMin)) count += 1;
   if (typeof f.priceMax === "number" && !Number.isNaN(f.priceMax)) count += 1;
   if (f.ratingMin > 0) count += 1;
+  if (f.fav !== "all") count += 1;
+  if (f.followed === "yes") count += 1;
   return count;
+}
+
+/** 作者键（与 macOS 版一致：优先 maker_id，否则 ``n:名称``）。 */
+export function makerKeyOf(maker: string, makerId: string | null | undefined): string {
+  const id = makerId ?? "";
+  return id ? id : `n:${maker}`;
 }
 
 /** 从 regist_date（"YYYY-MM-DD HH:MM:SS"）解析发售年份 */
@@ -86,10 +103,23 @@ function compare(a: WorkView, b: WorkView, sort: SortKey): number {
 }
 
 /** 应用筛选并按指定键排序；返回新数组（不修改输入）。 */
-export function applyFilters(works: WorkView[], f: FilterState, sort: SortKey): WorkView[] {
+export function applyFilters(
+  works: WorkView[],
+  f: FilterState,
+  sort: SortKey,
+  favorites: { favoriteIds: Set<string>; followedKeys: Set<string> },
+): WorkView[] {
   const keyword = f.keyword.trim().toLowerCase();
   const genres = f.genres;
   const out = works.filter((work) => {
+    if (f.fav === "yes" && !favorites.favoriteIds.has(work.id)) return false;
+    if (f.fav === "no" && favorites.favoriteIds.has(work.id)) return false;
+    if (
+      f.followed === "yes" &&
+      !favorites.followedKeys.has(makerKeyOf(work.maker, work.maker_id))
+    ) {
+      return false;
+    }
     if (keyword) {
       const haystack = `${work.title} ${work.maker} ${work.category} ${work.id}`.toLowerCase();
       if (!haystack.includes(keyword)) return false;
