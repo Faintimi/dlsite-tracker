@@ -58,7 +58,11 @@ fn get_data_path(app: AppHandle) -> Option<String> {
 #[tauri::command]
 async fn pick_data_file(app: AppHandle) -> Result<Option<String>, String> {
     let current = read_settings(&app).data_path;
-    let mut dialog = app.dialog().file().add_filter("works.json", &["json"]);
+    let mut dialog = app
+        .dialog()
+        .file()
+        .set_title("选择游戏数据文件")
+        .add_filter("works.json", &["json"]);
     if let Some(dir) = current.as_deref().and_then(|p| Path::new(p).parent()) {
         dialog = dialog.set_directory(dir);
     }
@@ -379,6 +383,70 @@ fn start_update(app: AppHandle, kind: String, range: Option<String>) -> Result<S
     }
 }
 
+/// 本地同步导出（对齐 macOS 版「更新」：先跑管道导出，再重读文件）。
+/// 返回 "ok"（已导出）或 "no-export"（非管道目录布局，调用方直接重读即可）。
+#[tauri::command]
+async fn run_export(app: AppHandle) -> Result<String, String> {
+    let project_dir = project_dir_of(&app)?;
+    #[cfg(windows)]
+    {
+        let status = Command::new("python")
+            .args(["-m", "dlsite_tracker", "export"])
+            .current_dir(&project_dir)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+        match status {
+            Ok(code) if code.success() => Ok("ok".to_string()),
+            Ok(_) => Err("导出失败：详见 data/ 目录日志".to_string()),
+            Err(_) => Ok("no-export".to_string()),
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        let script = project_dir.join("scripts").join("export.sh");
+        if !script.is_file() {
+            return Ok("no-export".to_string());
+        }
+        let status = Command::new("/bin/bash")
+            .arg(&script)
+            .current_dir(&project_dir)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+        match status {
+            Ok(code) if code.success() => Ok("ok".to_string()),
+            Ok(_) => Err("导出失败：详见 data/ 目录日志".to_string()),
+            Err(e) => Err(format!("导出失败：{e}")),
+        }
+    }
+}
+
+/// macOS 版收藏数据（~/Library/Application Support/DoujinGameFinder/favorites.json）。
+#[derive(serde::Serialize)]
+struct MacosFavorites {
+    path: String,
+    raw: String,
+}
+
+/// 读取 macOS 原生版的收藏文件原文（不存在返回 null；供一次性迁移）。
+#[tauri::command]
+fn read_macos_favorites(app: AppHandle) -> Result<Option<MacosFavorites>, String> {
+    let home = app.path().home_dir().map_err(|e| e.to_string())?;
+    let path = home
+        .join("Library")
+        .join("Application Support")
+        .join("DoujinGameFinder")
+        .join("favorites.json");
+    match fs::read_to_string(&path) {
+        Ok(raw) => Ok(Some(MacosFavorites {
+            path: path.to_string_lossy().into_owned(),
+            raw,
+        })),
+        Err(_) => Ok(None),
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -405,7 +473,9 @@ pub fn run() {
             import_switch,
             cancel_import,
             start_genre_import,
-            watch_genre
+            watch_genre,
+            run_export,
+            read_macos_favorites
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

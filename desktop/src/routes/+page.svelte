@@ -7,6 +7,8 @@
     getDataPath,
     loadWorks,
     pickDataFile,
+    readMacosFavorites,
+    runExport,
     type LoadedData,
     type WorkView,
   } from "$lib/api";
@@ -29,7 +31,7 @@
   import Sidebar from "$lib/Sidebar.svelte";
   import { DEFAULT_COLLECTION_NAME, library } from "$lib/library.svelte";
   import { prefs } from "$lib/prefs.svelte";
-  import { ICONS } from "$lib/ui";
+  import { ICONS, categoriesOf } from "$lib/ui";
   import CompactRow from "$lib/CompactRow.svelte";
   import CoverTile from "$lib/CoverTile.svelte";
   import LargeRow from "$lib/LargeRow.svelte";
@@ -128,6 +130,10 @@
   let status = $state<Status>("empty");
   let errorMessage = $state("");
   let data = $state<LoadedData | null>(null);
+  let syncing = $state(false);
+  let lastError = $state("");
+  let loadedAt = $state("");
+  let updateError = $state("");
 
   let view = $state<ViewMode>(normalizeView(prefs.data.displayMode));
   let sort = $state<SortKey>("sales");
@@ -158,7 +164,7 @@
   let hoverY = $state(0);
   let hoverTimer: ReturnType<typeof setTimeout> | null = null;
 
-  // 对话框：收藏夹 / 分类导入 / 加入每日刷新 / 年份选择
+  // 对话框：收藏夹 / 分类导入 / 加入每日刷新 / 年份选择 / macOS 收藏迁移
   let collectionPrompt = $state<{ workId: string } | null>(null);
   let collectionName = $state("");
   let genreImportRequest = $state<{ id: string; name: string } | null>(null);
@@ -166,8 +172,39 @@
   let yearDialog = $state<{ mode: "update" | "deeper" } | null>(null);
   let yearValue = $state(new Date().getFullYear() - 5);
   let deeperValue = $state(7);
+  let macosFavorites = $state<{ path: string; raw: string; collections: number; makers: number } | null>(null);
+  let showMacosImport = $state(false);
 
   const works = $derived(data?.works ?? []);
+
+  /** 测量用「最宽内容」卡片：长标题 + 最长 9 个分类 + 三形式 + 全徽章 + 全数据行 + 折扣价 */
+  const measureWork = $derived.by((): WorkView | null => {
+    const base = works[0];
+    if (!base) return null;
+    const top = [...new Set(works.flatMap((work) => categoriesOf(work)))]
+      .sort((a, b) => b.length - a.length)
+      .slice(0, 9);
+    return {
+      ...base,
+      title: base.title.length >= 32 ? base.title : `${base.title} ${base.title}`,
+      category: (top.length > 0 ? top : categoriesOf(base)).join(" | "),
+      form: "模拟/角色扮演/音声",
+      sales: base.sales ?? 123456,
+      rating: base.rating ?? 4.75,
+      rating_count: base.rating_count ?? 123456,
+      regist_date: base.regist_date || "2020-01-01",
+      price: base.price ?? 1000,
+      official_price: (base.price ?? 1000) + 1000,
+      discount_rate: base.discount_rate ?? 50,
+      rank_day_current: base.rank_day_current ?? 1,
+      rank_week_current: base.rank_week_current ?? 2,
+      rank_month_current: base.rank_month_current ?? 3,
+      rank_trend_current: base.rank_trend_current ?? 4,
+      voice: true,
+      music: true,
+      video: true,
+    };
+  });
   const activeCollectionId = $derived(viewFilter.kind === "collection" ? viewFilter.id : "");
   const activeMaker = $derived(viewFilter.kind === "maker" ? viewFilter : null);
   const collectionNameOf = $derived(
@@ -183,9 +220,6 @@
   const genres = $derived(data?.file.genres ?? []);
   const genreCatalog = $derived(data?.file.genre_catalog ?? []);
   const activeGenre = $derived(genres.find((entry) => entry.id === filter.genreFocus) ?? null);
-  const generatedAt = $derived(
-    data ? new Date(data.file.generated_at).toLocaleString("zh-CN", { hour12: false }) : "",
-  );
 
   const cfg = $derived(VIEWS[view]);
   const usable = $derived(Math.max(0, viewportW - 44));
@@ -199,7 +233,13 @@
       ? 0
       : Math.min(cfg.maxW ?? Number.POSITIVE_INFINITY, (usable - (cols - 1) * cfg.gap) / cols),
   );
-  const rowH = $derived(cfg.itemH + cfg.gap);
+
+  // 行高：按「最宽内容卡片」实测高度取最大值（macOS 网格行高随内容自适应；
+  // 固定行高会裁掉部分卡片的价格/心/打开行，实测可将行高撑到足够）
+  let measureEl = $state<HTMLDivElement | null>(null);
+  let measuredH = $state(0);
+  const itemH = $derived(Math.max(cfg.itemH, Math.ceil(measuredH)));
+  const rowH = $derived(itemH + cfg.gap);
   const totalRows = $derived(Math.ceil(filtered.length / cols));
   const totalHeight = $derived(totalRows * rowH);
   const firstRow = $derived(Math.max(0, Math.floor(scrollTop / rowH) - 1));
@@ -259,7 +299,9 @@
       case "loading":
         return "正在解析数据…";
       case "ready":
-        return `已载入 ${works.length.toLocaleString("ja-JP")} 部作品 · 更新于 ${generatedAt}`;
+        if (lastError) return "更新失败；仍显示上次导入的作品";
+        if (syncing) return "正在同步本地数据…";
+        return `已更新 ${works.length} 部作品${loadedAt ? ` · ${loadedAt}` : ""}`;
       case "error":
         return "无法加载数据";
       default:
@@ -372,6 +414,18 @@
     return () => observer.disconnect();
   });
 
+  // 实测「最宽内容卡片」高度（视图 / 列宽 / 主题变化时自动重测）
+  $effect(() => {
+    const el = measureEl;
+    if (!el) return;
+    const observer = new ResizeObserver(() => {
+      measuredH = el.offsetHeight;
+    });
+    observer.observe(el);
+    measuredH = el.offsetHeight;
+    return () => observer.disconnect();
+  });
+
   // 筛选 / 排序 / 视图 / 视图范围变化时：回到顶部并收起浮窗与菜单
   $effect(() => {
     void filter.keyword;
@@ -398,7 +452,7 @@
   });
 
   onMount(() => {
-    void library.load();
+    void library.load().then(() => checkMacosFavorites());
     void bootstrap();
     const timer = setInterval(() => {
       void pollProgress();
@@ -418,7 +472,8 @@
   }
 
   async function reload() {
-    status = "loading";
+    const hadData = data !== null;
+    if (!hadData) status = "loading";
     errorMessage = "";
     try {
       // 先让「加载中」渲染一帧，再做读文件与解析的重活
@@ -426,12 +481,64 @@
       data = await loadWorks();
       console.info(`[radar] 已加载 ${data.works.length} 件作品（${data.path}）`);
       scrollTop = 0;
+      loadedAt = new Date().toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
+      lastError = "";
       status = "ready";
     } catch (error) {
       console.error("[radar] 数据加载失败：", error);
-      status = "error";
-      errorMessage = String(error);
+      if (hadData) {
+        // 对齐 macOS：保留上次导入的作品，仅提示失败
+        lastError = String(error);
+        updateError = String(error);
+        status = "ready";
+      } else {
+        status = "error";
+        errorMessage = String(error);
+      }
     }
+  }
+
+  /** 更新（对齐 macOS）：先本地同步导出（纯本机、不联网），再重读文件。 */
+  async function refreshData() {
+    if (!data) {
+      await pick();
+      return;
+    }
+    syncing = true;
+    try {
+      const result = await runExport();
+      console.info(`[radar] 本地同步导出：${result}`);
+    } catch (error) {
+      syncing = false;
+      updateError = String(error);
+      return;
+    }
+    await reload();
+    syncing = false;
+  }
+
+  /** macOS 迁移入口：仅在还未有收藏与关注、且检测到 macOS 收藏文件时显示。 */
+  async function checkMacosFavorites() {
+    try {
+      const file = await readMacosFavorites();
+      if (!file) return;
+      const counts = library.describeMacosFavorites(file.raw);
+      if (library.isEmpty() && (counts.collections > 0 || counts.makers > 0)) {
+        macosFavorites = { path: file.path, raw: file.raw, ...counts };
+      }
+    } catch (error) {
+      console.error("[radar] macOS 收藏检测失败：", error);
+    }
+  }
+
+  function importMacosFavorites() {
+    if (!macosFavorites) return;
+    const result = library.mergeMacosFavorites(macosFavorites.raw);
+    showMacosImport = false;
+    macosFavorites = null;
+    window.alert(
+      `已导入收藏：新增 ${result.collections} 个收藏夹、${result.makers} 位关注制作者（已与现有数据合并）。`,
+    );
   }
 
   async function pick() {
@@ -462,13 +569,32 @@
   }
 
   function openDisplayMenu(event: MouseEvent) {
+    // 关键：阻止事件继续冒泡到 window，否则菜单挂载瞬间会被同一击关闭
+    event.stopPropagation();
+    if (displayMenu) {
+      displayMenu = null;
+      return;
+    }
     const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
     displayMenu = { x: rect.left, y: rect.bottom + 6 };
   }
 
   function openUpdateMenu(event: MouseEvent) {
+    event.stopPropagation();
+    if (updateMenu) {
+      updateMenu = null;
+      return;
+    }
     const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
     updateMenu = { x: Math.max(8, rect.right - 250), y: rect.bottom + 6 };
+  }
+
+  /** 个性化弹层：点击外部关闭（对齐 macOS popover 行为）。 */
+  function onWindowClick(event: MouseEvent) {
+    if (!showPersonalization) return;
+    const target = event.target as HTMLElement | null;
+    if (target?.closest(".popover") || target?.closest(".personalization-trigger")) return;
+    showPersonalization = false;
   }
 
   // P21：悬停 0.5 秒显示浮窗
@@ -707,7 +833,7 @@
   <title>同人游戏雷达 · Doujin Game Radar</title>
 </svelte:head>
 
-<svelte:window onkeydown={onKeydown} />
+<svelte:window onkeydown={onKeydown} onclick={onWindowClick} />
 
 <div class="app">
   {#if prefs.data.sidebarVisible}
@@ -733,6 +859,8 @@
       onImportToggle={(on) => void handleImportToggle(on)}
       onCancelImport={() => void cancelImport().then(() => pollProgress())}
       onCancelFollow={(maker) => library.toggleFollow(maker.key, maker.name, maker.maker_id)}
+      macosImport={macosFavorites}
+      onImportMacos={() => (showMacosImport = true)}
     />
   {/if}
 
@@ -755,9 +883,12 @@
           {VIEWS[view].label}
         </button>
         <button
-          class="btn with-icon"
+          class="btn with-icon personalization-trigger"
           class:active={showPersonalization}
-          onclick={() => (showPersonalization = !showPersonalization)}
+          onclick={(event) => {
+            event.stopPropagation();
+            showPersonalization = !showPersonalization;
+          }}
         >
           {@html ICONS.slider}个性化
         </button>
@@ -767,8 +898,8 @@
         </button>
         <button
           class="btn primary with-icon"
-          onclick={() => void (status === "ready" && data ? reload() : pick())}
-          disabled={status === "loading"}
+          onclick={() => void refreshData()}
+          disabled={status === "loading" || syncing}
         >
           {@html ICONS.refresh}更新
         </button>
@@ -864,13 +995,52 @@
       </div>
       <div class="scroller" bind:this={scroller} onscroll={onScroll}>
         <div class="canvas" style="height: {totalHeight + 22}px">
+          {#if measureWork}
+            <div
+              class="measure"
+              style="width: {cfg.kind === 'list' ? usable : cellW}px"
+              bind:this={measureEl}
+              aria-hidden="true"
+            >
+              {#if view === "largeCards"}
+                <LargeRow
+                  game={measureWork}
+                  showBadges
+                  showDiscount
+                  showRatingCount
+                  rankText="#88"
+                  onopen={() => {}}
+                />
+              {:else if view === "compact"}
+                <CompactRow
+                  game={measureWork}
+                  showBadges
+                  showDiscount
+                  showRatingCount
+                  rankText="#88"
+                  onopen={() => {}}
+                />
+              {:else if view === "coverWall"}
+                <CoverTile game={measureWork} showBadges />
+              {:else}
+                <MediumCard
+                  game={measureWork}
+                  showBadges
+                  showDiscount
+                  showRatingCount
+                  rankText="#88"
+                  onopen={() => {}}
+                />
+              {/if}
+            </div>
+          {/if}
           {#each rows as row (row.key)}
             <div class="grid-row" style="top: {row.top}px; gap: {cfg.gap}px">
               {#each row.items as w (w.id)}
                 <div
                   class="cell"
                   role="listitem"
-                  style="height: {cfg.itemH}px; {cfg.kind === 'list' ? 'flex:1;' : `width:${cellW}px;`}"
+                  style="height: {itemH}px; {cfg.kind === 'list' ? 'flex:1;' : `width:${cellW}px;`}"
                   ondblclick={() => openWork(w.url)}
                   oncontextmenu={(event) => openMenu(w, event)}
                   onmouseenter={(event) => enterHover(w, event)}
@@ -1080,6 +1250,27 @@
   />
 {/if}
 
+{#if updateError}
+  <ConfirmDialog
+    title="无法更新"
+    message={updateError}
+    confirmLabel="知道了"
+    hideCancel
+    onconfirm={() => (updateError = "")}
+    oncancel={() => (updateError = "")}
+  />
+{/if}
+
+{#if showMacosImport && macosFavorites}
+  <ConfirmDialog
+    title="从 macOS 版导入收藏"
+    message={`将导入 ${macosFavorites.collections} 个收藏夹、${macosFavorites.makers} 位关注制作者（与现有收藏合并，不覆盖）。文件：${macosFavorites.path}`}
+    confirmLabel="导入"
+    onconfirm={importMacosFavorites}
+    oncancel={() => (showMacosImport = false)}
+  />
+{/if}
+
 <style>
   .app {
     display: flex;
@@ -1273,6 +1464,14 @@
 
   .canvas {
     position: relative;
+  }
+
+  .measure {
+    position: absolute;
+    left: -20000px;
+    top: 0;
+    visibility: hidden;
+    pointer-events: none;
   }
 
   .grid-row {

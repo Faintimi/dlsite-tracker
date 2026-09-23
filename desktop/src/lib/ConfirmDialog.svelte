@@ -5,6 +5,7 @@
     message = "",
     confirmLabel,
     cancelLabel = "取消",
+    hideCancel = false,
     danger = false,
     busy = false,
     onconfirm,
@@ -14,6 +15,7 @@
     message?: string;
     confirmLabel: string;
     cancelLabel?: string;
+    hideCancel?: boolean;
     danger?: boolean;
     busy?: boolean;
     onconfirm: () => void;
@@ -37,7 +39,9 @@
       <div class="message">{message}</div>
     {/if}
     <div class="buttons">
-      <button class="btn" onclick={oncancel} disabled={busy}>{cancelLabel}</button>
+      {#if !hideCancel}
+        <button class="btn" onclick={oncancel} disabled={busy}>{cancelLabel}</button>
+      {/if}
       <button class="btn" class:danger onclick={onconfirm} disabled={busy}>{confirmLabel}</button>
     </div>
   </div>

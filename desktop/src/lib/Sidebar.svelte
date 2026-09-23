@@ -34,6 +34,8 @@
     onImportToggle,
     onCancelImport,
     onCancelFollow,
+    macosImport = null,
+    onImportMacos,
   }: {
     works: WorkView[];
     genres: GenreEntry[];
@@ -53,6 +55,8 @@
     onImportToggle: (on: boolean) => void;
     onCancelImport: () => void;
     onCancelFollow: (maker: FollowedMaker) => void;
+    macosImport?: { path: string; collections: number; makers: number } | null;
+    onImportMacos?: () => void;
   } = $props();
 
   let genreSearch = $state("");
@@ -254,6 +258,11 @@
     >
       <span class="link-icon">{@html ICONS.plus}</span>新建收藏夹
     </button>
+    {#if macosImport}
+      <button class="link" title={macosImport.path} onclick={onImportMacos}>
+        <span class="link-icon">{@html ICONS.tray}</span>从 macOS 版导入收藏…
+      </button>
+    {/if}
     {#if makers.length > 0}
       <div class="subtitle">关注的制作者</div>
       {#each makers as maker (maker.key)}
