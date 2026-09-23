@@ -4,6 +4,7 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
@@ -117,6 +118,95 @@ fn save_library(app: AppHandle, data: String) -> Result<(), String> {
     fs::rename(&tmp, &path).map_err(|e| e.to_string())
 }
 
+/// 数据目录（works.json 所在目录，进度文件也在这里）。
+fn out_dir_of(app: &AppHandle) -> Result<PathBuf, String> {
+    let data_path = read_settings(app).data_path.ok_or("尚未选择数据文件")?;
+    PathBuf::from(data_path)
+        .parent()
+        .map(|path| path.to_path_buf())
+        .ok_or_else(|| "数据文件路径无效".to_string())
+}
+
+/// 两条进度文件的原文（不存在返回 null）：update-progress.json / import-progress.json。
+#[derive(serde::Serialize)]
+struct ProgressFiles {
+    update: Option<String>,
+    import_progress: Option<String>,
+}
+
+#[tauri::command]
+fn read_progress_files(app: AppHandle) -> Result<ProgressFiles, String> {
+    let out_dir = out_dir_of(&app)?;
+    Ok(ProgressFiles {
+        update: fs::read_to_string(out_dir.join("update-progress.json")).ok(),
+        import_progress: fs::read_to_string(out_dir.join("import-progress.json")).ok(),
+    })
+}
+
+/// 启动管道任务（quick / daily / update-all[range]）。
+/// 进程独立运行，进度与结果通过进度文件 / 日志反馈，应用不做等待。
+#[tauri::command]
+fn start_update(app: AppHandle, kind: String, range: Option<String>) -> Result<String, String> {
+    let out_dir = out_dir_of(&app)?;
+    let project_dir = out_dir
+        .parent()
+        .ok_or_else(|| "无法确定项目目录（out 的上一级）".to_string())?;
+
+    #[cfg(windows)]
+    {
+        let chain = match kind.as_str() {
+            "quick" => "quick",
+            "daily" => "daily",
+            "update-all" => "update-all",
+            _ => return Err(format!("未知任务类型：{kind}")),
+        };
+        let mut command = Command::new("python");
+        command.arg("-m").arg("dlsite_tracker").arg("task").arg(chain);
+        if let Some(value) = range.as_deref().filter(|value| !value.is_empty()) {
+            command.arg(value);
+        }
+        command
+            .current_dir(project_dir)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        let child = command.spawn().map_err(|e| format!("无法启动更新：{e}"))?;
+        std::thread::spawn(move || {
+            let mut child = child;
+            let _ = child.wait();
+        });
+        Ok(format!("已启动 {chain}"))
+    }
+
+    #[cfg(not(windows))]
+    {
+        let script = match kind.as_str() {
+            "quick" => "quick-update.sh",
+            "daily" => "daily.sh",
+            "update-all" => "update-all.sh",
+            _ => return Err(format!("未知任务类型：{kind}")),
+        };
+        let script_path = project_dir.join("scripts").join(script);
+        if !script_path.is_file() {
+            return Err(format!("未找到更新脚本：{}", script_path.display()));
+        }
+        let mut command = Command::new("/bin/bash");
+        command.arg(&script_path);
+        if kind == "update-all" {
+            command.arg(range.as_deref().unwrap_or("1"));
+        }
+        command
+            .current_dir(project_dir)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        let child = command.spawn().map_err(|e| format!("无法启动更新：{e}"))?;
+        std::thread::spawn(move || {
+            let mut child = child;
+            let _ = child.wait();
+        });
+        Ok(format!("已启动 {script}"))
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -137,7 +227,9 @@ pub fn run() {
             pick_data_file,
             load_works,
             load_library,
-            save_library
+            save_library,
+            read_progress_files,
+            start_update
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

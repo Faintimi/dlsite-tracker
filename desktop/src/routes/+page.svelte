@@ -21,7 +21,16 @@
   import FilterPanel from "$lib/FilterPanel.svelte";
   import HoverCard from "$lib/HoverCard.svelte";
   import ContextMenu from "$lib/ContextMenu.svelte";
+  import UpdateBanner from "$lib/UpdateBanner.svelte";
   import { DEFAULT_COLLECTION_NAME, library } from "$lib/library.svelte";
+  import {
+    ACTIVE_PHASES,
+    isRunning,
+    readProgress,
+    startUpdate,
+    type ImportProgress,
+    type UpdateState,
+  } from "$lib/pipeline";
 
   type Status = "empty" | "loading" | "ready" | "error";
   type ViewMode = "grid" | "wall" | "info" | "compact" | "strip";
@@ -54,6 +63,12 @@
   let showFilters = $state(false);
   // 右键菜单（作品上下文操作）
   let menu = $state<{ x: number; y: number; work: WorkView } | null>(null);
+  // 更新任务：进度轮询与横幅
+  let progress = $state<UpdateState | null>(null);
+  let importInfo = $state<ImportProgress | null>(null);
+  let bannerDismissed = $state(false);
+  let updateMenu = $state<{ x: number; y: number } | null>(null);
+  let lastProgressTs = 0;
 
   let scroller: HTMLDivElement | null = $state(null);
   let viewportW = $state(1200);
@@ -72,6 +87,13 @@
   const followedKeys = $derived(library.followedKeys());
   const filtered = $derived(applyFilters(works, filter, sort, { favoriteIds, followedKeys }));
   const barTarget = $derived(barWork ?? filtered[0] ?? null);
+  // 横幅可见性：运行中始终显示；完成后 15 分钟内可手动关闭
+  const bannerVisible = $derived(
+    !!progress &&
+      !bannerDismissed &&
+      (isRunning(progress) ||
+        (progress.updated_ts ?? 0) > Math.floor(Date.now() / 1000) - 900),
+  );
   const years = $derived.by(() => {
     const set = new Set<number>();
     for (const work of works) {
@@ -148,6 +170,31 @@
     items.push({ label: "打开 DLsite 页面", action: () => openWork(target.url) });
     return items;
   });
+  // 「更新数据」菜单项
+  const updateMenuItems = $derived.by(() => {
+    const items: { label: string; action: () => void }[] = [];
+    items.push({ label: "立即更新热榜（快，约 1–2 分钟）", action: () => void runUpdate("quick") });
+    items.push({ label: "完整维护（同每日计划）", action: () => void runUpdate("daily") });
+    items.push({
+      label: "继续抓更早…（续深导入）",
+      action: () => {
+        const value = window.prompt("续深目标年数（2–30）：", "7");
+        if (value !== null && /^\d+$/.test(value.trim())) {
+          void runUpdate("update-all", `deeper:${value.trim()}`);
+        }
+      },
+    });
+    items.push({
+      label: "导入最近 N 年…",
+      action: () => {
+        const value = window.prompt("导入最近几年（1–30）：", "1");
+        if (value !== null && /^\d+$/.test(value.trim())) {
+          void runUpdate("update-all", value.trim());
+        }
+      },
+    });
+    return items;
+  });
 
   $effect(() => {
     const el = scroller;
@@ -186,6 +233,11 @@
   onMount(() => {
     void library.load();
     void bootstrap();
+    const timer = setInterval(() => {
+      void pollProgress();
+    }, 2000);
+    void pollProgress();
+    return () => clearInterval(timer);
   });
 
   async function bootstrap() {
@@ -240,6 +292,43 @@
     event.stopPropagation();
     hideHover();
     menu = { x: event.clientX, y: event.clientY, work };
+  }
+
+  async function pollProgress() {
+    try {
+      const { state, importProgress } = await readProgress();
+      if (state && (state.updated_ts ?? 0) !== lastProgressTs) {
+        const previous = progress?.phase;
+        lastProgressTs = state.updated_ts ?? 0;
+        bannerDismissed = false;
+        if (state.phase === "done" && previous && ACTIVE_PHASES.has(previous)) {
+          void reload(); // 更新完成 → 自动刷新数据
+        }
+      }
+      progress = state;
+      importInfo = importProgress;
+    } catch {
+      // 轮询失败不打扰（文件可能暂不可读；下次再试）
+    }
+  }
+
+  async function runUpdate(kind: "quick" | "daily" | "update-all", range?: string) {
+    if (isRunning(progress)) {
+      window.alert("已有更新在运行中，进度见顶部横幅。");
+      return;
+    }
+    try {
+      await startUpdate(kind, range);
+      bannerDismissed = false;
+      await pollProgress();
+    } catch (error) {
+      window.alert(String(error));
+    }
+  }
+
+  function openUpdateMenu(event: MouseEvent) {
+    const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
+    updateMenu = { x: rect.left, y: rect.bottom + 6 };
   }
 
   function enterHover(work: WorkView, event: MouseEvent) {
@@ -307,6 +396,7 @@
       <button class="btn" onclick={() => reload()} disabled={status === "loading" || status === "empty"}>
         重新加载
       </button>
+      <button class="btn" onclick={openUpdateMenu}>更新数据 ▾</button>
     </div>
     {#if status === "ready" && data}
       <div class="actions views">
@@ -333,6 +423,14 @@
       {/if}
     </div>
   </header>
+
+  {#if bannerVisible && progress}
+    <UpdateBanner
+      state={progress}
+      importProgress={importInfo}
+      ondismiss={() => (bannerDismissed = true)}
+    />
+  {/if}
 
   {#if status === "ready" && data}
     {#if showFilters}
@@ -533,6 +631,15 @@
 
 {#if menu}
   <ContextMenu x={menu.x} y={menu.y} items={menuItems} onclose={() => (menu = null)} />
+{/if}
+
+{#if updateMenu}
+  <ContextMenu
+    x={updateMenu.x}
+    y={updateMenu.y}
+    items={updateMenuItems}
+    onclose={() => (updateMenu = null)}
+  />
 {/if}
 
 <style>
