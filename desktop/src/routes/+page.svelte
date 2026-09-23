@@ -7,7 +7,6 @@
     getDataPath,
     loadWorks,
     pickDataFile,
-    readMacosFavorites,
     runExport,
     type LoadedData,
     type WorkView,
@@ -164,7 +163,7 @@
   let hoverY = $state(0);
   let hoverTimer: ReturnType<typeof setTimeout> | null = null;
 
-  // 对话框：收藏夹 / 分类导入 / 加入每日刷新 / 年份选择 / macOS 收藏迁移
+  // 对话框：收藏夹 / 分类导入 / 加入每日刷新 / 年份选择
   let collectionPrompt = $state<{ workId: string } | null>(null);
   let collectionName = $state("");
   let genreImportRequest = $state<{ id: string; name: string } | null>(null);
@@ -172,8 +171,6 @@
   let yearDialog = $state<{ mode: "update" | "deeper" } | null>(null);
   let yearValue = $state(new Date().getFullYear() - 5);
   let deeperValue = $state(7);
-  let macosFavorites = $state<{ path: string; raw: string; collections: number; makers: number } | null>(null);
-  let showMacosImport = $state(false);
 
   const works = $derived(data?.works ?? []);
 
@@ -452,7 +449,7 @@
   });
 
   onMount(() => {
-    void library.load().then(() => checkMacosFavorites());
+    void library.load();
     void bootstrap();
     const timer = setInterval(() => {
       void pollProgress();
@@ -515,30 +512,6 @@
     }
     await reload();
     syncing = false;
-  }
-
-  /** macOS 迁移入口：仅在还未有收藏与关注、且检测到 macOS 收藏文件时显示。 */
-  async function checkMacosFavorites() {
-    try {
-      const file = await readMacosFavorites();
-      if (!file) return;
-      const counts = library.describeMacosFavorites(file.raw);
-      if (library.isEmpty() && (counts.collections > 0 || counts.makers > 0)) {
-        macosFavorites = { path: file.path, raw: file.raw, ...counts };
-      }
-    } catch (error) {
-      console.error("[radar] macOS 收藏检测失败：", error);
-    }
-  }
-
-  function importMacosFavorites() {
-    if (!macosFavorites) return;
-    const result = library.mergeMacosFavorites(macosFavorites.raw);
-    showMacosImport = false;
-    macosFavorites = null;
-    window.alert(
-      `已导入收藏：新增 ${result.collections} 个收藏夹、${result.makers} 位关注制作者（已与现有数据合并）。`,
-    );
   }
 
   async function pick() {
@@ -859,8 +832,6 @@
       onImportToggle={(on) => void handleImportToggle(on)}
       onCancelImport={() => void cancelImport().then(() => pollProgress())}
       onCancelFollow={(maker) => library.toggleFollow(maker.key, maker.name, maker.maker_id)}
-      macosImport={macosFavorites}
-      onImportMacos={() => (showMacosImport = true)}
     />
   {/if}
 
@@ -892,7 +863,6 @@
         >
           {@html ICONS.slider}个性化
         </button>
-        <button class="btn" onclick={pick}>选择数据文件</button>
         <button class="btn with-icon" onclick={openUpdateMenu}>
           {@html ICONS.tray}开始更新数据 ▾
         </button>
@@ -1258,16 +1228,6 @@
     hideCancel
     onconfirm={() => (updateError = "")}
     oncancel={() => (updateError = "")}
-  />
-{/if}
-
-{#if showMacosImport && macosFavorites}
-  <ConfirmDialog
-    title="从 macOS 版导入收藏"
-    message={`将导入 ${macosFavorites.collections} 个收藏夹、${macosFavorites.makers} 位关注制作者（与现有收藏合并，不覆盖）。文件：${macosFavorites.path}`}
-    confirmLabel="导入"
-    onconfirm={importMacosFavorites}
-    oncancel={() => (showMacosImport = false)}
   />
 {/if}
 

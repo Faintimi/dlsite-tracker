@@ -162,61 +162,6 @@ class LibraryStore {
     else this.data.makers.push({ key, name, maker_id: makerId });
     this.scheduleSave();
   }
-
-  /** 是否还没有任何收藏与关注（用于 macOS 迁移入口的显示判断）。 */
-  isEmpty(): boolean {
-    return (
-      this.data.makers.length === 0 &&
-      this.data.collections.every((collection) => collection.work_ids.length === 0)
-    );
-  }
-
-  /** 解析 macOS 版 favorites.json（camelCase）并统计条目数。 */
-  describeMacosFavorites(raw: string): { collections: number; makers: number } {
-    const parsed = JSON.parse(raw) as MacosFavoritesData;
-    return {
-      collections: Array.isArray(parsed.collections) ? parsed.collections.length : 0,
-      makers: Array.isArray(parsed.makers) ? parsed.makers.length : 0,
-    };
-  }
-
-  /** 合并 macOS 版收藏（同名收藏夹合并去重；同 key 制作者去重；不覆盖现有数据）。 */
-  mergeMacosFavorites(raw: string): { collections: number; makers: number } {
-    const parsed = JSON.parse(raw) as MacosFavoritesData;
-    let addedCollections = 0;
-    let addedMakers = 0;
-    for (const item of Array.isArray(parsed.collections) ? parsed.collections : []) {
-      const name = String(item.name ?? "").trim() || "未命名收藏夹";
-      const ids = Array.isArray(item.workIDs) ? item.workIDs.map(String) : [];
-      const existing = this.data.collections.find((collection) => collection.name === name);
-      if (existing) {
-        for (const id of ids) {
-          if (!existing.work_ids.includes(id)) existing.work_ids.push(id);
-        }
-      } else {
-        this.data.collections.push({ id: newId(), name, work_ids: ids });
-        addedCollections += 1;
-      }
-    }
-    for (const item of Array.isArray(parsed.makers) ? parsed.makers : []) {
-      const key = String(item.key ?? "");
-      if (!key || this.data.makers.some((maker) => maker.key === key)) continue;
-      this.data.makers.push({
-        key,
-        name: String(item.name ?? ""),
-        maker_id: String(item.makerID ?? ""),
-      });
-      addedMakers += 1;
-    }
-    this.scheduleSave();
-    return { collections: addedCollections, makers: addedMakers };
-  }
-}
-
-/** macOS 版 favorites.json 结构（camelCase） */
-interface MacosFavoritesData {
-  collections?: { id?: string; name?: string; workIDs?: string[] }[];
-  makers?: { key?: string; name?: string; makerID?: string }[];
 }
 
 export const library = new LibraryStore();

@@ -422,31 +422,6 @@ async fn run_export(app: AppHandle) -> Result<String, String> {
     }
 }
 
-/// macOS 版收藏数据（~/Library/Application Support/DoujinGameFinder/favorites.json）。
-#[derive(serde::Serialize)]
-struct MacosFavorites {
-    path: String,
-    raw: String,
-}
-
-/// 读取 macOS 原生版的收藏文件原文（不存在返回 null；供一次性迁移）。
-#[tauri::command]
-fn read_macos_favorites(app: AppHandle) -> Result<Option<MacosFavorites>, String> {
-    let home = app.path().home_dir().map_err(|e| e.to_string())?;
-    let path = home
-        .join("Library")
-        .join("Application Support")
-        .join("DoujinGameFinder")
-        .join("favorites.json");
-    match fs::read_to_string(&path) {
-        Ok(raw) => Ok(Some(MacosFavorites {
-            path: path.to_string_lossy().into_owned(),
-            raw,
-        })),
-        Err(_) => Ok(None),
-    }
-}
-
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -474,8 +449,7 @@ pub fn run() {
             cancel_import,
             start_genre_import,
             watch_genre,
-            run_export,
-            read_macos_favorites
+            run_export
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

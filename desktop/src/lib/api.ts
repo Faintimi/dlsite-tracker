@@ -81,16 +81,6 @@ export function runExport(): Promise<string> {
   return invoke<string>("run_export");
 }
 
-export interface MacosFavoritesFile {
-  path: string;
-  raw: string;
-}
-
-/** macOS 原生版收藏文件（~/Library/Application Support/DoujinGameFinder/favorites.json；不存在为 null）。 */
-export function readMacosFavorites(): Promise<MacosFavoritesFile | null> {
-  return invoke<MacosFavoritesFile | null>("read_macos_favorites");
-}
-
 /** 打开文件选择框；返回选中的 works.json 路径（取消则为 null）。 */
 export function pickDataFile(): Promise<string | null> {
   return invoke<string | null>("pick_data_file");
