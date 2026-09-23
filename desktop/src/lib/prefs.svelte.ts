@@ -21,7 +21,17 @@ export interface Prefs {
   filtersMore: boolean;
   /** 发现系统：我的口味（分类名列表，手动勾选） */
   taste: string[];
+  /** 发现系统：三档口味画像（旧 taste 自动迁移为 like）。 */
+  tasteProfile: Record<string, TasteLevel>;
+  /** 参与口味推断的收藏夹；空数组表示全部。 */
+  tasteCollectionIds: string[];
+  /** 用户从收藏中挑选、用于辅助建立口味的作品。 */
+  tasteExemplarIds: string[];
+  /** 是否完成过首次口味引导。 */
+  tasteOnboarded: boolean;
 }
+
+export type TasteLevel = "love" | "like" | "less";
 
 function defaults(): Prefs {
   return {
@@ -33,13 +43,29 @@ function defaults(): Prefs {
     sections: { favorites: true, genres: false, filters: true, imports: false },
     filtersMore: false,
     taste: [],
+    tasteProfile: {},
+    tasteCollectionIds: [],
+    tasteExemplarIds: [],
+    tasteOnboarded: false,
   };
 }
 
 function load(): Prefs {
   try {
     const raw = localStorage.getItem(KEY);
-    if (raw) return { ...defaults(), ...(JSON.parse(raw) as Partial<Prefs>) };
+    if (raw) {
+      const parsed = JSON.parse(raw) as Partial<Prefs>;
+      const loaded = { ...defaults(), ...parsed };
+      if (!loaded.tasteProfile || typeof loaded.tasteProfile !== "object" || Array.isArray(loaded.tasteProfile)) {
+        loaded.tasteProfile = {};
+      }
+      if (Object.keys(loaded.tasteProfile).length === 0 && Array.isArray(parsed.taste)) {
+        loaded.tasteProfile = Object.fromEntries(
+          parsed.taste.filter((name) => typeof name === "string" && name).map((name) => [name, "like"]),
+        );
+      }
+      return loaded;
+    }
   } catch {
     // 忽略：损坏时回到默认
   }
@@ -65,6 +91,26 @@ class PrefsStore {
   /** 切换侧栏某分区的展开状态（合并写入，避免覆盖其他分区）。 */
   toggleSection(key: keyof SectionsState, value: boolean): void {
     this.data.sections = { ...this.data.sections, [key]: value };
+    this.persist();
+  }
+
+  setTasteLevel(name: string, level: TasteLevel | null): void {
+    const next = { ...this.data.tasteProfile };
+    if (level === null) delete next[name];
+    else next[name] = level;
+    this.data.tasteProfile = next;
+    // 保留旧键供降级读取；只记录正向口味。
+    this.data.taste = Object.entries(next)
+      .filter(([, value]) => value !== "less")
+      .map(([key]) => key);
+    this.persist();
+  }
+
+  replaceTasteProfile(profile: Record<string, TasteLevel>): void {
+    this.data.tasteProfile = { ...profile };
+    this.data.taste = Object.entries(profile)
+      .filter(([, value]) => value !== "less")
+      .map(([key]) => key);
     this.persist();
   }
 }

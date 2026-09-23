@@ -1,5 +1,6 @@
 <script lang="ts">
-  import type { GenreEntry, WorkView } from "$lib/api";
+  import type { WorkView } from "$lib/api";
+  import type { TasteLevel } from "$lib/prefs.svelte";
   import { ICONS } from "$lib/ui";
   import {
     DISCOVERY,
@@ -13,32 +14,50 @@
 
   let {
     works,
-    genres,
-    taste,
+    tasteProfile,
     followedMakers,
-    onTasteChange,
+    seenIds,
+    dismissedIds,
+    onEditTaste,
     onopen,
     onhover,
     onleave,
+    onseen,
+    oncontext,
   }: {
     works: WorkView[];
-    genres: GenreEntry[];
-    taste: string[];
+    tasteProfile: Record<string, TasteLevel>;
     followedMakers: Set<string>;
-    onTasteChange: (next: string[]) => void;
+    seenIds: Set<string>;
+    dismissedIds: Set<string>;
+    onEditTaste: () => void;
     onopen?: (game: WorkView) => void;
     onhover?: (game: WorkView, event: MouseEvent) => void;
     onleave?: () => void;
+    onseen?: (game: WorkView) => void;
+    oncontext?: (game: WorkView, event: MouseEvent) => void;
   } = $props();
 
-  let editing = $state(false);
-  let query = $state("");
   const expanded = $state<Record<string, boolean>>({});
-  // 「未看过」记录在下一步（M3）接入本地文件；先以空集合运行
-  const seen = new Set<string>();
+  // 首屏铺满：每区显示数＝网格列数 ×2 行，避免末行留下空位（随窗口宽度自适应）。
+  // 网格宽 = 发现页宽 − 页面内边距 36（18×2）− 分区内边距 28（14×2）。
+  let discoverW = $state(0);
+  const GRID_MIN = 158; // 与 .d-grid 的 minmax 保持一致
+  const GRID_GAP = 12;
+  const previewCount = $derived(
+    discoverW === 0
+      ? DISCOVERY.sectionPreview
+      : Math.max(1, Math.floor((Math.max(0, discoverW - 64) + GRID_GAP) / (GRID_MIN + GRID_GAP))) * 2,
+  );
 
-  const ctx: TasteContext = $derived(buildTasteContext(works, taste, followedMakers));
-  const result = $derived(buildDiscovery(works, ctx, seen));
+  const ctx: TasteContext = $derived(buildTasteContext(works, tasteProfile, followedMakers));
+  const result = $derived(buildDiscovery(works, ctx, seenIds, dismissedIds));
+  const tasteCounts = $derived({
+    love: Object.values(tasteProfile).filter((level) => level === "love").length,
+    like: Object.values(tasteProfile).filter((level) => level === "like").length,
+    less: Object.values(tasteProfile).filter((level) => level === "less").length,
+  });
+  const positiveTasteCount = $derived(tasteCounts.love + tasteCounts.like);
 
   // 遗珠区（与其它分区不同）：随机分批探索——每批 DISCOVERY.sectionPreview 部，
   // 「换一批」出下一批，轮完后重新洗牌。加权随机：口味分越高越容易靠前，但全池都会轮到。
@@ -46,24 +65,25 @@
   let oldBatch = $state(0);
   let oldSig = ""; // 非响应式签名：仅当数据/口味变动时重洗，避免轮询重算时跳批
   $effect(() => {
-    const sig = `${works.length}|${result.old.length}|${result.old[0]?.game.id ?? ""}|${taste.join(",")}`;
+    const sig = `${works.length}|${result.old.length}|${result.old[0]?.game.id ?? ""}|${JSON.stringify(tasteProfile)}`;
     if (sig !== oldSig) {
       oldSig = sig;
       oldOrder = weightedShuffle(result.old);
       oldBatch = 0;
     }
   });
-  const oldTotal = $derived(Math.max(1, Math.ceil(oldOrder.length / DISCOVERY.sectionPreview)));
+  const oldTotal = $derived(Math.max(1, Math.ceil(oldOrder.length / previewCount)));
+  const oldBatchSafe = $derived(Math.min(oldBatch, oldTotal - 1));
   const oldVisible = $derived(
-    oldOrder.slice(oldBatch * DISCOVERY.sectionPreview, (oldBatch + 1) * DISCOVERY.sectionPreview),
+    oldOrder.slice(oldBatchSafe * previewCount, (oldBatchSafe + 1) * previewCount),
   );
 
   function nextOldBatch() {
-    if (oldBatch + 1 >= oldTotal) {
+    if (oldBatchSafe + 1 >= oldTotal) {
       oldOrder = weightedShuffle(result.old);
       oldBatch = 0;
     } else {
-      oldBatch += 1;
+      oldBatch = oldBatchSafe + 1;
     }
   }
 
@@ -94,31 +114,17 @@
       key: "fresh",
       title: "合你口味的新作",
       note: `近 ${DISCOVERY.freshWindowDays} 天发售 ∩ 口味匹配`,
-      empty: taste.length === 0 ? "先在下方勾选口味分类" : "近期没有匹配口味的新作",
+      empty: positiveTasteCount === 0 ? "先建立你的口味画像" : "近期没有匹配口味的新作",
       items: result.fresh,
     },
     {
       key: "old",
       title: "遗珠 · 老作挖掘",
-      note: `${DISCOVERY.oldMinDays} 天前发售 · 口味匹配 · 每批随机 ${DISCOVERY.sectionPreview} 部（可「换一批」）`,
-      empty: taste.length === 0 ? "先在下方勾选口味分类" : "没有匹配口味的遗珠候选",
+      note: `${DISCOVERY.oldMinDays} 天前发售 · 口味匹配 · 每批随机 ${previewCount} 部（可「换一批」）`,
+      empty: positiveTasteCount === 0 ? "先建立你的口味画像" : "没有匹配口味的遗珠候选",
       items: result.old,
     },
   ]);
-
-  const candidateGenres = $derived(
-    genres
-      .filter((entry) => (entry.count ?? 0) > 0)
-      .sort((a, b) => (b.count ?? 0) - (a.count ?? 0))
-      .filter((entry) => !query.trim() || entry.name.includes(query.trim()))
-      .slice(0, 120),
-  );
-
-  function toggleTaste(name: string) {
-    onTasteChange(
-      taste.includes(name) ? taste.filter((item) => item !== name) : [...taste, name],
-    );
-  }
 
   function toggleExpand(key: string) {
     expanded[key] = !expanded[key];
@@ -127,11 +133,11 @@
   function shown(section: Section): DiscoveryItem[] {
     return expanded[section.key]
       ? section.items
-      : section.items.slice(0, DISCOVERY.sectionPreview);
+      : section.items.slice(0, previewCount);
   }
 </script>
 
-<div class="discover">
+<div class="discover" bind:clientWidth={discoverW}>
   <div class="d-head">
     <span class="d-head-icon">{@html ICONS.flame}</span>
     <div class="d-head-text">
@@ -142,35 +148,16 @@
 
   <div class="taste-bar">
     <span class="taste-label">我的口味</span>
-    {#if taste.length === 0}
-      <span class="taste-hint">选几个你喜欢的分类，下面的分区就会开始工作</span>
+    {#if Object.keys(tasteProfile).length === 0}
+      <span class="taste-hint">从喜欢的作品与收藏开始，建立更懂你的口味画像</span>
     {:else}
-      {#each taste as name (name)}
-        <button class="chip on" title="点击移除" onclick={() => toggleTaste(name)}>{name} ×</button>
-      {/each}
+      {#if tasteCounts.love > 0}<span class="taste-stat love">很喜欢 {tasteCounts.love}</span>{/if}
+      {#if tasteCounts.like > 0}<span class="taste-stat like">喜欢 {tasteCounts.like}</span>{/if}
+      {#if tasteCounts.less > 0}<span class="taste-stat less">少推荐 {tasteCounts.less}</span>{/if}
     {/if}
     <span class="spacer"></span>
-    <button class="link" onclick={() => (editing = !editing)}>
-      {editing ? "收起分类" : "＋ 编辑口味"}
-    </button>
+    <button class="link" onclick={onEditTaste}>{Object.keys(tasteProfile).length === 0 ? "开始设置" : "编辑口味"}</button>
   </div>
-
-  {#if editing || taste.length === 0}
-    <div class="picker">
-      <input class="picker-search" type="text" placeholder="搜索分类…" bind:value={query} />
-      <div class="picker-grid">
-        {#each candidateGenres as entry (entry.id)}
-          <button
-            class="chip"
-            class:on={taste.includes(entry.name)}
-            onclick={() => toggleTaste(entry.name)}
-          >
-            {entry.name}<span class="chip-count">{entry.count ?? 0}</span>
-          </button>
-        {/each}
-      </div>
-    </div>
-  {/if}
 
   {#each sections as section (section.key)}
     <section class="d-sec">
@@ -178,7 +165,7 @@
         <span class="d-sec-title">{section.title}</span>
         <span class="d-sec-count">{section.items.length} 部</span>
         <span class="spacer"></span>
-        {#if section.key !== "old" && section.items.length > DISCOVERY.sectionPreview}
+        {#if section.key !== "old" && section.items.length > previewCount}
           <button class="link" onclick={() => toggleExpand(section.key)}>
             {expanded[section.key] ? "收起" : `查看全部（${section.items.length}）`}
           </button>
@@ -190,24 +177,40 @@
       {:else if section.key === "old"}
         <div class="d-grid" role="list">
           {#each oldVisible as item (item.game.id)}
-            <DiscoverCard {item} {onopen} {onhover} {onleave} />
+            <DiscoverCard
+              {item}
+              {onopen}
+              {onhover}
+              {onleave}
+              {onseen}
+              {oncontext}
+              seen={seenIds.has(item.game.id)}
+            />
           {/each}
         </div>
-        {#if oldOrder.length > DISCOVERY.sectionPreview}
+        {#if oldOrder.length > previewCount}
           <div class="d-batch">
             <span class="d-batch-info">
-              第 {oldBatch + 1} / {oldTotal} 批 · 共 {oldOrder.length} 部候选
+              第 {oldBatchSafe + 1} / {oldTotal} 批 · 共 {oldOrder.length} 部候选
             </span>
             <span class="spacer"></span>
             <button class="d-batch-btn" onclick={nextOldBatch}>
-              {oldBatch + 1 >= oldTotal ? "重新洗牌 ↻" : "换一批 ↻"}
+              {oldBatchSafe + 1 >= oldTotal ? "重新洗牌 ↻" : "换一批 ↻"}
             </button>
           </div>
         {/if}
       {:else}
         <div class="d-grid" role="list">
           {#each shown(section) as item (item.game.id)}
-            <DiscoverCard {item} {onopen} {onhover} {onleave} />
+            <DiscoverCard
+              {item}
+              {onopen}
+              {onhover}
+              {onleave}
+              {onseen}
+              {oncontext}
+              seen={seenIds.has(item.game.id)}
+            />
           {/each}
         </div>
       {/if}
@@ -272,60 +275,23 @@
     flex: 1;
   }
 
-  .chip {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    border: 1px solid var(--border);
-    background: transparent;
+  .taste-stat {
     border-radius: 999px;
-    padding: 3px 10px;
-    font-size: 12px;
-    color: var(--muted);
-    cursor: pointer;
-  }
-
-  .chip:hover {
-    border-color: var(--accent);
-    color: var(--accent);
-  }
-
-  .chip.on {
-    background: var(--accent);
-    border-color: var(--accent);
+    padding: 3px 9px;
     color: #fff;
+    font-size: 11.5px;
   }
 
-  .chip-count {
-    font-size: 10.5px;
-    opacity: 0.65;
+  .taste-stat.love {
+    background: #d94a65;
   }
 
-  .picker {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    background: var(--panel);
-    border-radius: 11px;
-    padding: 10px 12px;
+  .taste-stat.like {
+    background: var(--accent);
   }
 
-  .picker-search {
-    width: 220px;
-    border: 1px solid var(--border);
-    border-radius: 7px;
-    background: transparent;
-    color: inherit;
-    padding: 5px 9px;
-    font-size: 12.5px;
-  }
-
-  .picker-grid {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
-    max-height: 180px;
-    overflow-y: auto;
+  .taste-stat.less {
+    background: #737782;
   }
 
   .d-sec {

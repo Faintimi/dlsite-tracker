@@ -15,7 +15,8 @@
 - Filters: keyword, genre intersection, year range, sales / price / rating, favorites & collections, followed makers only
 - Sorting: sales / rating / release date / price / title
 - Collections (multi-membership) and maker following; right-click quick menu; hover detail card
-- **Discover** (computed locally in real time): rising dark horses (sprinting / high-hype), new releases matching your taste, and hidden gems among older works; pick taste categories manually — every recommendation comes with an explainable reason
+- **Discover** (computed locally in real time): rising dark horses (sprinting / high-hype), taste-matched new releases and hidden gems; a dedicated editor builds a three-level profile (love / like / show less) from visually selected favorite works, explainable collection analysis and human-oriented semantic groups; hovering for 2 seconds or opening marks a work as seen, with confirmed “Not interested” feedback
+- **Followed updates**: detects releases from followed makers within the last 14 calendar days, with a summary banner, sidebar unread count, and a cover list grouped by maker; opening the list clears unread status while NEW labels remain for the full two-week window; “Check now” starts a quick data update and detects additions after reload
 - **First run**: "Initialize data" on the empty state sets everything up on your machine (fetches the hot ranking in ~5–10 minutes) — no Python install, no repository clone
 - **One-click update**: "更新数据 ▾" → quick hot update / full maintenance / deeper import / import last N years; live banner + auto-refresh when done (packaged builds use the embedded pipeline — no extra dependencies)
 

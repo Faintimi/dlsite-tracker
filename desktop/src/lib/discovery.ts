@@ -4,6 +4,7 @@
 import type { WorkView } from "$lib/api";
 import { categoriesOf } from "$lib/ui";
 import { makerKeyOf } from "$lib/filter";
+import type { TasteLevel } from "$lib/prefs.svelte";
 
 /** 阈值与权重（初版经验值；跑一段时间后可按真实数据调整） */
 export const DISCOVERY = {
@@ -25,9 +26,11 @@ export const DISCOVERY = {
   coocProbMin: 0.12,
   /** 权重：命中口味分类 / 近似分类按概率 / 已关注作者 */
   hitScore: 2,
+  loveScore: 3,
+  lessScore: -3,
   coocScore: 1,
   makerScore: 1.5,
-  /** 每区首屏卡片数（超出提供「查看全部」展开） */
+  /** 每区首屏卡片数回退值（窗口测量前；实际＝网格列数 ×2，保证首屏铺满整行） */
   sectionPreview: 12,
 } as const;
 
@@ -36,7 +39,11 @@ export interface DiscoveryItem {
   score: number;
   /** 卡片上的理由（如 "±2 天 +2181" / "含「RPG」"） */
   note: string;
+  /** 可同时出现的客观信号角标。 */
+  badges: DiscoveryBadge[];
 }
+
+export type DiscoveryBadge = "sprint" | "hype";
 
 export interface DiscoveryResult {
   sprint: DiscoveryItem[];
@@ -48,6 +55,7 @@ export interface DiscoveryResult {
 /** 口味上下文：口味集合 + 共现扩展（分类名 → 条件概率权重）+ 已关注作者 */
 export interface TasteContext {
   taste: Set<string>;
+  levels: Map<string, TasteLevel>;
   expanded: Map<string, number>;
   followedMakers: Set<string>;
 }
@@ -68,10 +76,15 @@ export function daysSinceRegist(game: WorkView, now: number = Date.now()): numbe
  */
 export function buildTasteContext(
   works: WorkView[],
-  tasteNames: string[],
+  profile: Record<string, TasteLevel>,
   followedMakers: Set<string>,
 ): TasteContext {
-  const taste = new Set(tasteNames);
+  const levels = new Map(Object.entries(profile));
+  const taste = new Set(
+    Object.entries(profile)
+      .filter(([, level]) => level !== "less")
+      .map(([name]) => name),
+  );
   const expanded = new Map<string, number>();
   if (taste.size > 0) {
     const countA = new Map<string, number>();
@@ -105,7 +118,7 @@ export function buildTasteContext(
       }
     }
   }
-  return { taste, expanded, followedMakers };
+  return { taste, levels, expanded, followedMakers };
 }
 
 /** 作品口味得分：命中口味分类 ×2 + 近似分类按概率加权 + 已关注作者加分 */
@@ -113,8 +126,13 @@ export function tasteScore(game: WorkView, ctx: TasteContext): number {
   if (ctx.taste.size === 0) return 0;
   let score = 0;
   for (const cat of categoriesOf(game)) {
-    if (ctx.taste.has(cat)) {
+    const level = ctx.levels.get(cat);
+    if (level === "love") {
+      score += DISCOVERY.loveScore;
+    } else if (level === "like") {
       score += DISCOVERY.hitScore;
+    } else if (level === "less") {
+      score += DISCOVERY.lessScore;
     } else {
       const weight = ctx.expanded.get(cat);
       if (weight !== undefined) score += DISCOVERY.coocScore * weight;
@@ -128,13 +146,16 @@ export function tasteScore(game: WorkView, ctx: TasteContext): number {
 
 /** 推荐理由：「含 X」/「近味 Y」/「已关注作者」 */
 export function tasteNote(game: WorkView, ctx: TasteContext): string {
+  const loved: string[] = [];
   const hits: string[] = [];
   const near: string[] = [];
   for (const cat of categoriesOf(game)) {
-    if (ctx.taste.has(cat)) hits.push(cat);
+    if (ctx.levels.get(cat) === "love") loved.push(cat);
+    else if (ctx.levels.get(cat) === "like") hits.push(cat);
     else if (ctx.expanded.has(cat)) near.push(cat);
   }
   const parts: string[] = [];
+  if (loved.length) parts.push(`很喜欢「${loved.slice(0, 2).join("」「")}」`);
   if (hits.length) parts.push(`含「${hits.slice(0, 3).join("」「")}」`);
   if (near.length) parts.push(`近味「${near.slice(0, 2).join("」「")}」`);
   if (parts.length === 0 && ctx.followedMakers.has(makerKeyOf(game.maker, game.maker_id))) {
@@ -148,6 +169,7 @@ export function buildDiscovery(
   works: WorkView[],
   ctx: TasteContext,
   seen: Set<string> = new Set(),
+  dismissed: Set<string> = new Set(),
   now: number = Date.now(),
 ): DiscoveryResult {
   const sprint: DiscoveryItem[] = [];
@@ -155,33 +177,40 @@ export function buildDiscovery(
   const fresh: DiscoveryItem[] = [];
   const old: DiscoveryItem[] = [];
   for (const game of works) {
+    if (dismissed.has(game.id)) continue;
     const days = daysSinceRegist(game, now);
     if (days === null) continue;
 
     const delta = typeof game.sales_delta === "number" ? game.sales_delta : null;
     const deltaDays = typeof game.sales_delta_days === "number" ? game.sales_delta_days : null;
-    if (days <= DISCOVERY.newWindowDays && delta !== null && delta >= DISCOVERY.sprintMinDelta) {
-      sprint.push({ game, score: delta, note: `±${deltaDays ?? "?"} 天 +${delta}` });
-    }
-
     const wish = typeof game.wishlist_count === "number" ? game.wishlist_count : null;
     const sales = game.sales ?? 0;
-    if (
+    const isSprint =
+      days <= DISCOVERY.newWindowDays && delta !== null && delta >= DISCOVERY.sprintMinDelta;
+    const isHype =
       days <= DISCOVERY.newWindowDays &&
       wish !== null &&
       wish >= DISCOVERY.hypeWishMin &&
-      sales <= wish * DISCOVERY.hypeRatio
-    ) {
-      hype.push({ game, score: wish, note: `心愿 ${wish} · 销量 ${sales}` });
+      sales <= wish * DISCOVERY.hypeRatio;
+    const badges: DiscoveryBadge[] = [
+      ...(isSprint ? (["sprint"] as const) : []),
+      ...(isHype ? (["hype"] as const) : []),
+    ];
+
+    if (isSprint) {
+      sprint.push({ game, score: delta, note: `±${deltaDays ?? "?"} 天 +${delta}`, badges });
+    }
+    if (isHype) {
+      hype.push({ game, score: wish, note: `心愿 ${wish} · 销量 ${sales}`, badges });
     }
 
     if (ctx.taste.size > 0) {
       const score = tasteScore(game, ctx);
       if (score >= DISCOVERY.tasteMinScore) {
         if (days <= DISCOVERY.freshWindowDays) {
-          fresh.push({ game, score, note: tasteNote(game, ctx) });
+          fresh.push({ game, score, note: tasteNote(game, ctx), badges });
         } else if (days >= DISCOVERY.oldMinDays && !seen.has(game.id)) {
-          old.push({ game, score, note: tasteNote(game, ctx) });
+          old.push({ game, score, note: tasteNote(game, ctx), badges });
         }
       }
     }

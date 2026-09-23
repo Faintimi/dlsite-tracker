@@ -24,18 +24,21 @@
     type ViewFilter,
   } from "$lib/filter";
   import ContextMenu from "$lib/ContextMenu.svelte";
+  import DiscoveryFeedbackDialog from "$lib/DiscoveryFeedbackDialog.svelte";
   import HoverPanel from "$lib/HoverPanel.svelte";
   import UpdateBanner from "$lib/UpdateBanner.svelte";
   import ConfirmDialog from "$lib/ConfirmDialog.svelte";
   import PromptDialog from "$lib/PromptDialog.svelte";
   import YearPickerDialog from "$lib/YearPickerDialog.svelte";
   import Sidebar from "$lib/Sidebar.svelte";
+  import TasteEditor from "$lib/TasteEditor.svelte";
   import { DEFAULT_COLLECTION_NAME, library } from "$lib/library.svelte";
   import { prefs } from "$lib/prefs.svelte";
   import { ICONS, categoriesOf } from "$lib/ui";
   import CompactRow from "$lib/CompactRow.svelte";
   import CoverTile from "$lib/CoverTile.svelte";
   import Discover from "$lib/Discover.svelte";
+  import FollowUpdates from "$lib/FollowUpdates.svelte";
   import LargeRow from "$lib/LargeRow.svelte";
   import MediumCard from "$lib/MediumCard.svelte";
   import {
@@ -131,6 +134,13 @@
     return (VIEW_ORDER as string[]).includes(value) ? (value as ViewMode) : "largeCards";
   }
 
+  function releaseTimestamp(value: string): number {
+    const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(value);
+    if (match) return new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3])).getTime();
+    const stamp = Date.parse(value);
+    return Number.isFinite(stamp) ? stamp : 0;
+  }
+
   let status = $state<Status>("empty");
   let errorMessage = $state("");
   let initializing = $state(false);
@@ -143,14 +153,14 @@
 
   let view = $state<ViewMode>(normalizeView(prefs.data.displayMode));
   /** 主区模式：浏览（列表）/ 发现（口味匹配与黑马信号） */
-  let mode = $state<"browse" | "discover">("discover"); // TEMP-DEBUG
+  let mode = $state<"browse" | "discover" | "followUpdates">("browse");
   let sort = $state<SortKey>("sales");
   let filter = $state<FilterState>(emptyFilter());
   let viewFilter = $state<ViewFilter>({ kind: "all" });
   let importYears = $state("1");
 
   let showPersonalization = $state(false);
-  let cardMenu = $state<{ x: number; y: number; work: WorkView } | null>(null);
+  let cardMenu = $state<{ x: number; y: number; work: WorkView; discovery: boolean } | null>(null);
   let displayMenu = $state<{ x: number; y: number } | null>(null);
   let updateMenu = $state<{ x: number; y: number } | null>(null);
 
@@ -180,6 +190,8 @@
   let yearDialog = $state<{ mode: "update" | "deeper" } | null>(null);
   let yearValue = $state(new Date().getFullYear() - 5);
   let deeperValue = $state(7);
+  let dislikeRequest = $state<WorkView | null>(null);
+  let tasteEditorOpen = $state(false);
 
   const works = $derived(data?.works ?? []);
 
@@ -225,6 +237,27 @@
   const filtered = $derived(applyFilters(works, filter, sort, { viewFilter, favoriteIds }));
   /** 发现系统：已关注作者的 key 集合（用于口味得分加分） */
   const followedMakers = $derived(new Set(library.data.makers.map((maker) => maker.key)));
+  const recentFollowedWorks = $derived.by(() => {
+    const now = new Date();
+    const end = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1).getTime() - 1;
+    const start = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 13).getTime();
+    return works
+      .filter((work) => {
+        if (!followedMakers.has(makerKeyOf(work.maker, work.maker_id))) return false;
+        const released = releaseTimestamp(work.regist_date);
+        return released >= start && released <= end;
+      })
+      .sort((a, b) => releaseTimestamp(b.regist_date) - releaseTimestamp(a.regist_date));
+  });
+  const unreadFollowUpdateIds = $derived(library.unreadFollowUpdateIds());
+  const unreadFollowUpdates = $derived(
+    recentFollowedWorks.filter((work) => unreadFollowUpdateIds.has(work.id)),
+  );
+  const unreadFollowMakerCount = $derived(
+    new Set(unreadFollowUpdates.map((work) => makerKeyOf(work.maker, work.maker_id))).size,
+  );
+  const seenIds = $derived(library.seenIds());
+  const dismissedIds = $derived(library.dismissedIds());
   const genres = $derived(data?.file.genres ?? []);
   const genreCatalog = $derived(data?.file.genre_catalog ?? []);
   const activeGenre = $derived(genres.find((entry) => entry.id === filter.genreFocus) ?? null);
@@ -320,7 +353,7 @@
   // 作品右键菜单（对齐 macOS GameContextMenu：打开作品页 / 收藏夹 / 关注制作者）
   const menuItems = $derived.by(() => {
     const target = cardMenu?.work;
-    const items: { label: string; action: () => void; danger?: boolean }[] = [];
+    const items: { label: string; action: () => void; danger?: boolean; divider?: boolean }[] = [];
     if (!target) return items;
     const key = makerKeyOf(target.maker, target.maker_id);
     items.push({ label: "打开作品页", action: () => openWork(target.url) });
@@ -349,6 +382,14 @@
         : `关注制作者「${target.maker || "制作者未知"}」`,
       action: () => library.toggleFollow(key, target.maker, target.maker_id ?? ""),
     });
+    if (cardMenu?.discovery) {
+      items.push({
+        label: "不感兴趣…",
+        danger: true,
+        divider: true,
+        action: () => (dislikeRequest = target),
+      });
+    }
     return items;
   });
 
@@ -409,6 +450,15 @@
 
   const genreJobActive = $derived(genreInfo?.running === true);
 
+  let followScanSignature = "";
+  $effect(() => {
+    if (!library.loaded || status !== "ready") return;
+    const signature = `${[...followedMakers].sort().join(",")}|${recentFollowedWorks.map((work) => work.id).join(",")}`;
+    if (signature === followScanSignature) return;
+    followScanSignature = signature;
+    library.checkFollowUpdates(recentFollowedWorks.map((work) => work.id));
+  });
+
   $effect(() => {
     const el = scroller;
     if (!el) return;
@@ -460,7 +510,6 @@
   });
 
   onMount(() => {
-    prefs.set("taste", ["奇幻", "女主人公"]); // TEMP-DEBUG
     void library.load();
     void bootstrap();
     const timer = setInterval(() => {
@@ -573,7 +622,37 @@
     event.preventDefault();
     event.stopPropagation();
     hideHover();
-    cardMenu = { x: event.clientX, y: event.clientY, work };
+    cardMenu = { x: event.clientX, y: event.clientY, work, discovery: false };
+  }
+
+  function openDiscoveryMenu(work: WorkView, event: MouseEvent) {
+    event.preventDefault();
+    event.stopPropagation();
+    hideHover();
+    cardMenu = { x: event.clientX, y: event.clientY, work, discovery: true };
+  }
+
+  function matchedTaste(work: WorkView): string[] {
+    const categories = new Set(categoriesOf(work));
+    return Object.entries(prefs.data.tasteProfile)
+      .filter(([name, level]) => level !== "less" && categories.has(name))
+      .map(([name]) => name);
+  }
+
+  function dismissDiscovery(adjustTaste: boolean) {
+    const work = dislikeRequest;
+    dislikeRequest = null;
+    if (!work) return;
+    const matched = matchedTaste(work);
+    library.dismiss(work.id);
+    if (adjustTaste && matched.length > 0) {
+      const remove = new Set(matched);
+      prefs.replaceTasteProfile(
+        Object.fromEntries(
+          Object.entries(prefs.data.tasteProfile).filter(([name]) => !remove.has(name)),
+        ),
+      );
+    }
   }
 
   function openDisplayMenu(event: MouseEvent) {
@@ -871,6 +950,16 @@
     filter = emptyFilter();
   }
 
+  function openFollowUpdates() {
+    mode = "followUpdates";
+    library.markFollowUpdatesRead(recentFollowedWorks.map((work) => work.id));
+  }
+
+  async function refreshFollowUpdates() {
+    library.checkFollowUpdates(recentFollowedWorks.map((work) => work.id), true);
+    await runUpdate("quick");
+  }
+
   function submitCollection(value: string) {
     if (collectionPrompt) {
       library.createCollection(value, collectionPrompt.workId);
@@ -886,7 +975,7 @@
 <svelte:window onkeydown={onKeydown} onclick={onWindowClick} />
 
 <div class="app">
-  {#if prefs.data.sidebarVisible && mode === "browse"}
+  {#if prefs.data.sidebarVisible && mode !== "discover"}
     <Sidebar
       bind:filter
       bind:viewFilter
@@ -912,6 +1001,10 @@
       onImportToggle={(on) => void handleImportToggle(on)}
       onCancelImport={() => void cancelImport().then(() => pollProgress())}
       onCancelFollow={(maker) => library.toggleFollow(maker.key, maker.name, maker.maker_id)}
+      followUpdatesSelected={mode === "followUpdates"}
+      followUpdatesUnread={unreadFollowUpdates.length}
+      onOpenFollowUpdates={openFollowUpdates}
+      onOpenBrowse={() => (mode = "browse")}
     />
   {/if}
 
@@ -1009,18 +1102,41 @@
       <div class="banner-wrap">
         <UpdateBanner icon={banner.icon} text={banner.text} />
       </div>
+    {:else if unreadFollowUpdates.length > 0 && mode !== "followUpdates"}
+      <button class="follow-banner" onclick={openFollowUpdates}>
+        <span class="follow-banner-icon">{@html ICONS.flame}</span>
+        <span>{unreadFollowMakerCount} 位关注作者发布了 {unreadFollowUpdates.length} 部近两周新作</span>
+        <span class="spacer"></span>
+        <span class="follow-banner-link">查看更新</span>
+      </button>
     {/if}
 
     {#if mode === "discover" && status === "ready" && data}
       <Discover
         works={data.works}
-        {genres}
-        taste={prefs.data.taste}
+        tasteProfile={prefs.data.tasteProfile}
         {followedMakers}
-        onTasteChange={(next) => prefs.set("taste", next)}
+        {seenIds}
+        {dismissedIds}
+        onEditTaste={() => (tasteEditorOpen = true)}
         onopen={(game) => openWork(game.url)}
         onhover={enterHover}
         onleave={leaveHover}
+        onseen={(game) => library.markSeen(game.id)}
+        oncontext={openDiscoveryMenu}
+      />
+    {:else if mode === "followUpdates" && status === "ready" && data}
+      <FollowUpdates
+        works={recentFollowedWorks}
+        unreadIds={unreadFollowUpdateIds}
+        lastCheckedAt={library.data.follow_updates.last_checked_at}
+        refreshing={syncing || isRunning(progress)}
+        onrefresh={() => void refreshFollowUpdates()}
+        onopen={(work) => openWork(work.url)}
+        onmaker={(work) => {
+          mode = "browse";
+          showMaker(work);
+        }}
       />
     {:else}
       {#if viewFilter.kind !== "all"}
@@ -1249,8 +1365,37 @@
   <HoverPanel game={hoverWork} x={hoverX} y={hoverY} {genres} />
 {/if}
 
+{#if tasteEditorOpen}
+  <TasteEditor
+    works={data?.works ?? []}
+    collections={library.data.collections}
+    profile={prefs.data.tasteProfile}
+    collectionIds={prefs.data.tasteCollectionIds}
+    exemplarIds={prefs.data.tasteExemplarIds}
+    onboarded={prefs.data.tasteOnboarded}
+    onsave={(value) => {
+      prefs.replaceTasteProfile(value.profile);
+      prefs.set("tasteCollectionIds", value.collectionIds);
+      prefs.set("tasteExemplarIds", value.exemplarIds);
+      prefs.set("tasteOnboarded", true);
+      tasteEditorOpen = false;
+    }}
+    oncancel={() => (tasteEditorOpen = false)}
+  />
+{/if}
+
 {#if cardMenu}
   <ContextMenu x={cardMenu.x} y={cardMenu.y} items={menuItems} onclose={() => (cardMenu = null)} />
+{/if}
+
+{#if dislikeRequest}
+  <DiscoveryFeedbackDialog
+    title={dislikeRequest.title}
+    tasteNames={matchedTaste(dislikeRequest)}
+    onhide={() => dismissDiscovery(false)}
+    onlearn={() => dismissDiscovery(true)}
+    oncancel={() => (dislikeRequest = null)}
+  />
 {/if}
 
 {#if displayMenu}
@@ -1505,6 +1650,36 @@
 
   .banner-wrap {
     border-bottom: 1px solid var(--border);
+  }
+
+  .follow-banner {
+    width: 100%;
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    border: 0;
+    border-bottom: 1px solid var(--border);
+    background: color-mix(in srgb, var(--accent) 10%, transparent);
+    color: var(--text);
+    padding: 9px 22px;
+    font: inherit;
+    font-size: 12px;
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .follow-banner-icon,
+  .follow-banner-link {
+    color: var(--accent);
+  }
+
+  .follow-banner-icon {
+    display: inline-flex;
+  }
+
+  .follow-banner-link {
+    font-weight: 650;
   }
 
   .strip {

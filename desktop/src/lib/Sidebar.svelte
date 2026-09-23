@@ -39,6 +39,10 @@
     onImportToggle,
     onCancelImport,
     onCancelFollow,
+    followUpdatesSelected = false,
+    followUpdatesUnread = 0,
+    onOpenFollowUpdates,
+    onOpenBrowse,
   }: {
     works: WorkView[];
     genres: GenreEntry[];
@@ -61,6 +65,10 @@
     onImportToggle: (on: boolean) => void;
     onCancelImport: () => void;
     onCancelFollow: (maker: FollowedMaker) => void;
+    followUpdatesSelected?: boolean;
+    followUpdatesUnread?: number;
+    onOpenFollowUpdates: () => void;
+    onOpenBrowse: () => void;
   } = $props();
 
   const SECTION_DURATION = 220;
@@ -288,16 +296,22 @@
           icon={ICONS.gridAll}
           title="全部作品"
           count={works.length}
-          selected={viewFilter.kind === "all"}
-          onclick={() => (viewFilter = { kind: "all" })}
+          selected={!followUpdatesSelected && viewFilter.kind === "all"}
+          onclick={() => {
+            onOpenBrowse();
+            viewFilter = { kind: "all" };
+          }}
         />
         {#each collections as collection (collection.id)}
           <NavRow
             icon={ICONS.folder}
             title={collection.name}
             count={collection.work_ids.length}
-            selected={viewFilter.kind === "collection" && viewFilter.id === collection.id}
-            onclick={() => (viewFilter = { kind: "collection", id: collection.id })}
+            selected={!followUpdatesSelected && viewFilter.kind === "collection" && viewFilter.id === collection.id}
+            onclick={() => {
+              onOpenBrowse();
+              viewFilter = { kind: "collection", id: collection.id };
+            }}
             onmenu={(event) => openCollectionMenu(collection, event)}
           />
         {/each}
@@ -312,12 +326,22 @@
         </button>
         {#if makers.length > 0}
           <div class="subtitle">关注的制作者</div>
+          <NavRow
+            icon={ICONS.flame}
+            title="关注更新"
+            count={followUpdatesUnread}
+            selected={followUpdatesSelected}
+            onclick={onOpenFollowUpdates}
+          />
           {#each makers as maker (maker.key)}
             <NavRow
               icon={ICONS.personCircle}
               title={maker.name}
-              selected={viewFilter.kind === "maker" && viewFilter.key === maker.key}
-              onclick={() => (viewFilter = { kind: "maker", key: maker.key, name: maker.name, makerId: maker.maker_id })}
+              selected={!followUpdatesSelected && viewFilter.kind === "maker" && viewFilter.key === maker.key}
+              onclick={() => {
+                onOpenBrowse();
+                viewFilter = { kind: "maker", key: maker.key, name: maker.name, makerId: maker.maker_id };
+              }}
               onmenu={(event) => openMakerMenu(maker, event)}
             />
           {/each}
@@ -328,22 +352,23 @@
 
   <section class="card">
     <button
-      class="section-head"
+      class="section-head genre-section-head"
       title={prefs.data.sections.genres ? "收起「分类人气榜」" : "展开「分类人气榜」"}
       onclick={() => prefs.toggleSection("genres", !prefs.data.sections.genres)}
     >
       <span class="chev" class:open={prefs.data.sections.genres}>{@html ICONS.chevronRight}</span>
       <span class="bar"></span>
       <span class="sec-icon">{@html ICONS.chartBarFill}</span>
-      <span class="title">分类人气榜</span>
-      <span class="spacer"></span>
-      {#if !prefs.data.sections.genres}
-        <span class="summary">
-          {genres.length === 0
-            ? "暂无"
-            : `已导入 ${genres.length}${watchedCount > 0 ? ` · 每日刷新 ${watchedCount}` : ""}`}
-        </span>
-      {/if}
+      <span class="genre-head-copy">
+        <span class="title">分类人气榜</span>
+        {#if !prefs.data.sections.genres}
+          <span class="summary">
+            {genres.length === 0
+              ? "暂无已导入分类"
+              : `已导入 ${genres.length} 个分类${watchedCount > 0 ? ` · 每日刷新 ${watchedCount}` : ""}`}
+          </span>
+        {/if}
+      </span>
     </button>
     {#if prefs.data.sections.genres}
       <div class="section-body" transition:slide={{ duration: SECTION_DURATION }}>
@@ -731,6 +756,31 @@
     font-size: 11.5px;
     color: var(--muted);
     font-weight: 400;
+    white-space: nowrap;
+  }
+
+  /* 分类人气榜的标题与统计分两行，避免窄侧栏中标题被摘要挤成竖排。 */
+  .genre-section-head {
+    align-items: flex-start;
+  }
+
+  .genre-section-head > .chev,
+  .genre-section-head > .bar,
+  .genre-section-head > .sec-icon {
+    margin-top: 2px;
+  }
+
+  .genre-head-copy {
+    min-width: 0;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .genre-head-copy .title,
+  .genre-head-copy .summary {
+    display: block;
     white-space: nowrap;
   }
 

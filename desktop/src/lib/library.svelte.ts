@@ -17,6 +17,24 @@ export interface LibraryData {
   schema_version: number;
   collections: FavoriteCollection[];
   makers: FollowedMaker[];
+  discovery: DiscoveryHistory;
+  follow_updates: FollowUpdateHistory;
+}
+
+export interface DiscoveryHistory {
+  /** 作品号 → 首次确认看过的 Unix 毫秒时间戳。 */
+  seen: Record<string, number>;
+  /** 作品号 → 标记为不感兴趣的 Unix 毫秒时间戳。 */
+  dismissed: Record<string, number>;
+}
+
+export interface FollowUpdateHistory {
+  /** 最近一次在本机作品库中检查关注作者新作的 Unix 毫秒时间戳。 */
+  last_checked_at: number;
+  /** 已经识别过的作品号，避免重复提醒。 */
+  known_work_ids: string[];
+  /** 尚未阅读的作品号 → 首次发现时间。 */
+  unread: Record<string, number>;
 }
 
 export const DEFAULT_COLLECTION_NAME = "我的收藏";
@@ -28,6 +46,16 @@ function newId(): string {
 
 function newDefaultCollection(): FavoriteCollection {
   return { id: newId(), name: DEFAULT_COLLECTION_NAME, work_ids: [] };
+}
+
+function normalizeHistory(value: unknown): Record<string, number> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const out: Record<string, number> = {};
+  for (const [key, raw] of Object.entries(value)) {
+    const timestamp = Number(raw);
+    if (key && Number.isFinite(timestamp) && timestamp > 0) out[key] = timestamp;
+  }
+  return out;
 }
 
 function normalize(raw: LibraryData): LibraryData {
@@ -44,14 +72,37 @@ function normalize(raw: LibraryData): LibraryData {
     name: String(item.name ?? ""),
     maker_id: String(item.maker_id ?? ""),
   }));
-  return { schema_version: 1, collections, makers };
+  const discovery = raw.discovery ?? { seen: {}, dismissed: {} };
+  const followUpdates = raw.follow_updates ?? {
+    last_checked_at: 0,
+    known_work_ids: [],
+    unread: {},
+  };
+  return {
+    schema_version: 3,
+    collections,
+    makers,
+    discovery: {
+      seen: normalizeHistory(discovery.seen),
+      dismissed: normalizeHistory(discovery.dismissed),
+    },
+    follow_updates: {
+      last_checked_at: Number(followUpdates.last_checked_at) || 0,
+      known_work_ids: Array.isArray(followUpdates.known_work_ids)
+        ? [...new Set(followUpdates.known_work_ids.map(String).filter(Boolean))].slice(-5000)
+        : [],
+      unread: normalizeHistory(followUpdates.unread),
+    },
+  };
 }
 
 class LibraryStore {
   data = $state<LibraryData>({
-    schema_version: 1,
+    schema_version: 3,
     collections: [newDefaultCollection()],
     makers: [],
+    discovery: { seen: {}, dismissed: {} },
+    follow_updates: { last_checked_at: 0, known_work_ids: [], unread: {} },
   });
   loaded = $state(false);
 
@@ -160,6 +211,76 @@ class LibraryStore {
     const index = this.data.makers.findIndex((maker) => maker.key === key);
     if (index >= 0) this.data.makers.splice(index, 1);
     else this.data.makers.push({ key, name, maker_id: makerId });
+    this.scheduleSave();
+  }
+
+  unreadFollowUpdateIds(): Set<string> {
+    return new Set(Object.keys(this.data.follow_updates.unread));
+  }
+
+  /** 扫描当前作品库中的近两周关注作者新作；已知作品不会重复提醒。 */
+  checkFollowUpdates(workIds: string[], force = false): number {
+    const state = this.data.follow_updates;
+    const now = Date.now();
+    const last = new Date(state.last_checked_at);
+    const today = new Date(now);
+    const alreadyCheckedToday =
+      last.getFullYear() === today.getFullYear() &&
+      last.getMonth() === today.getMonth() &&
+      last.getDate() === today.getDate();
+    const known = new Set(state.known_work_ids);
+    const current = new Set(workIds);
+    let added = 0;
+    let expired = 0;
+    for (const id of Object.keys(state.unread)) {
+      if (current.has(id)) continue;
+      delete state.unread[id];
+      expired += 1;
+    }
+    for (const id of workIds) {
+      if (!id || known.has(id)) continue;
+      known.add(id);
+      state.unread[id] = now;
+      added += 1;
+    }
+    if (!alreadyCheckedToday || force || added > 0) state.last_checked_at = now;
+    if (added > 0 || expired > 0 || !alreadyCheckedToday || force) {
+      state.known_work_ids = [...known].slice(-5000);
+      this.scheduleSave();
+    }
+    return added;
+  }
+
+  markFollowUpdatesRead(workIds?: string[]): void {
+    const unread = this.data.follow_updates.unread;
+    const ids = workIds ?? Object.keys(unread);
+    let changed = false;
+    for (const id of ids) {
+      if (!(id in unread)) continue;
+      delete unread[id];
+      changed = true;
+    }
+    if (changed) this.scheduleSave();
+  }
+
+  seenIds(): Set<string> {
+    return new Set(Object.keys(this.data.discovery.seen));
+  }
+
+  dismissedIds(): Set<string> {
+    return new Set(Object.keys(this.data.discovery.dismissed));
+  }
+
+  markSeen(workId: string): void {
+    if (!workId || this.data.discovery.seen[workId]) return;
+    this.data.discovery.seen[workId] = Date.now();
+    this.scheduleSave();
+  }
+
+  dismiss(workId: string): void {
+    if (!workId) return;
+    this.data.discovery.dismissed[workId] = Date.now();
+    this.markSeen(workId);
     this.scheduleSave();
   }
 }
