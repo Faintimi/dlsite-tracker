@@ -38,3 +38,5 @@ npm run check        # svelte-check 类型检查
 ## 与数据管道的关系
 
 应用读取管道导出的 `out/works.json`（schema v2）与同目录 `covers/`；采集与维护始终由根目录 `dlsite_tracker` 完成（用法见仓库根 README）。「更新数据」按钮只是在本机启动仓库内的固定任务链（`scripts/*.sh` / `python -m dlsite_tracker task …`）。
+
+首次启动时应用会**自动查找并绑定**数据文件：沿可执行文件所在目录向上查找，并扫描 `~/code`、`~/Code`、`~/Projects`、`~/Documents`、`~/Desktop` 与主目录下的一层子目录（找 `<项目>/out/works.json`）；找到后记住路径，下次直接使用。仅在自动查找失败（例如管道不在本机）时，才需要在空状态页手动选择一次。

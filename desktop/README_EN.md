@@ -38,3 +38,5 @@ npm run check        # svelte-check type checking
 ## Relation to the data pipeline
 
 The app reads the pipeline's exported `out/works.json` (schema v2) and the neighbouring `covers/`; collection and maintenance stay with `dlsite_tracker` at the repository root (see the root README). The "Update" button merely launches the repository's fixed task chains on your machine (`scripts/*.sh` / `python -m dlsite_tracker task …`).
+
+On first launch the app **auto-discovers and binds** the data file: it walks up from the executable's directory and scans one level under `~/code`, `~/Code`, `~/Projects`, `~/Documents`, `~/Desktop` and your home directory for `<project>/out/works.json`, then remembers the path. Manual selection is only needed when discovery fails (e.g. the pipeline lives on another machine).

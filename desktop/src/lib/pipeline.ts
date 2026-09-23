@@ -173,17 +173,17 @@ export function genreSummary(progress: GenreProgress): string {
   const name = progress.genre_name || progress.genre_id || "分类";
   switch (progress.phase) {
     case "fetch":
-      return `分类人气：「${name}」正在抓取人气榜…`;
+      return `分类人气榜：「${name}」正在抓取人气榜…`;
     case "enrich":
-      return `分类人气：「${name}」正在导入新作品（可能数分钟）…`;
+      return `分类人气榜：「${name}」正在导入新作品（可能数分钟）…`;
     case "images":
-      return `分类人气：「${name}」正在补齐封面…`;
+      return `分类人气榜：「${name}」正在补齐封面…`;
     case "export":
-      return `分类人气：「${name}」正在导出数据…`;
+      return `分类人气榜：「${name}」正在导出数据…`;
     case "done":
-      return `分类人气：「${name}」已更新（${progress.detail ?? "完成"}）`;
+      return `分类人气榜：「${name}」已更新（${progress.detail ?? "完成"}）`;
     case "failed":
-      return `分类人气更新失败：「${name}」（${progress.error || progress.detail || "详见 data/genre.log"}）`;
+      return `分类人气榜更新失败：「${name}」（${progress.error || progress.detail || "详见 data/genre.log"}）`;
     case "busy":
       return progress.detail ?? "";
     default:
