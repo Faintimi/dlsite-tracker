@@ -84,6 +84,11 @@ export const ICONS = {
   gridAll:
     '<svg viewBox="0 0 12 12" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.1"><rect x="1.4" y="1.4" width="4" height="4" rx="1"/><rect x="6.6" y="1.4" width="4" height="4" rx="1"/><rect x="1.4" y="6.6" width="4" height="4" rx="1"/><rect x="6.6" y="6.6" width="4" height="4" rx="1"/></svg>',
   plus: '<svg viewBox="0 0 12 12" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M6 2.2v7.6M2.2 6h7.6"/></svg>',
+  chevronDown:
+    '<svg viewBox="0 0 12 12" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2.6 4.4L6 7.8l3.4-3.4"/></svg>',
+  chevronRight:
+    '<svg viewBox="0 0 12 12" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4.4 2.6L7.8 6l-3.4 3.4"/></svg>',
+  info: '<svg viewBox="0 0 14 14" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.2"><circle cx="7" cy="7" r="5.6"/><path d="M7 6.2v3.6M7 4.6h.01"/></svg>',
   check:
     '<svg viewBox="0 0 12 12" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M2.2 6.4l2.6 2.6 5-5.4"/></svg>',
   chartBar:

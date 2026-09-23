@@ -47,9 +47,10 @@
     gap: 8px;
     width: 100%;
     padding: 5px 8px;
-    border-radius: 7px;
+    border-radius: 8px;
     cursor: default;
     text-align: left;
+    transition: background 0.15s ease;
   }
 
   .nav-row:hover {

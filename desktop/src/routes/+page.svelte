@@ -44,8 +44,10 @@
     isRunning,
     isStale,
     readProgress,
+    removeGenre,
     startGenreImport,
     startUpdate,
+    unwatchGenre,
     updateSummary,
     watchGenre,
     type GenreProgress,
@@ -790,6 +792,34 @@
     }
   }
 
+  /** 加入每日刷新 → 导出 + 重载（侧栏「每日刷新」计数随之更新）。 */
+  async function handleGenreWatch(id: string) {
+    try {
+      await watchGenre(id);
+      await refreshData();
+    } catch (error) {
+      updateError = String(error);
+    }
+  }
+
+  async function handleGenreUnwatch(id: string) {
+    try {
+      await unwatchGenre(id);
+      await refreshData();
+    } catch (error) {
+      updateError = String(error);
+    }
+  }
+
+  async function handleGenreRemove(id: string) {
+    try {
+      await removeGenre(id);
+      await refreshData();
+    } catch (error) {
+      updateError = String(error);
+    }
+  }
+
   function clearAllFilters() {
     filter = emptyFilter();
   }
@@ -828,6 +858,9 @@
         library.deleteCollection(id);
       }}
       onGenreImport={(id, name) => void handleGenreImport(id, name)}
+      onGenreWatch={(id) => void handleGenreWatch(id)}
+      onGenreUnwatch={(id) => void handleGenreUnwatch(id)}
+      onGenreRemove={(id) => void handleGenreRemove(id)}
       onClearFilters={clearAllFilters}
       onImportToggle={(on) => void handleImportToggle(on)}
       onCancelImport={() => void cancelImport().then(() => pollProgress())}
@@ -838,7 +871,15 @@
   <div class="main">
     <header class="header">
       <div class="brand">
-        <div class="brand-title">同人游戏雷达</div>
+        <div class="brand-line">
+          <div class="brand-title">同人游戏雷达</div>
+          <button
+            class="info-btn"
+            title="数据来自你导入的文件。「更新」重读同一文件；「开始更新数据」运行本地管道（导入 → 销量 → 封面 → 导出），完成后自动刷新。收藏与偏好保存在本机。"
+          >
+            {@html ICONS.info}
+          </button>
+        </div>
         <div class="brand-sub">{statusText}</div>
       </div>
       <div class="actions">
@@ -1256,6 +1297,26 @@
     display: flex;
     flex-direction: column;
     gap: 2px;
+  }
+
+  .brand-line {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .info-btn {
+    appearance: none;
+    border: 0;
+    background: transparent;
+    color: var(--muted);
+    padding: 0;
+    display: inline-flex;
+    cursor: default;
+  }
+
+  .info-btn:hover {
+    color: var(--accent);
   }
 
   .brand-title {

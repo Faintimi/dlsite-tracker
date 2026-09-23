@@ -716,6 +716,21 @@ class Store:
             for row in rows
         ]
 
+    def remove_genre(self, genre_id: str) -> Tuple[int, int]:
+        """移除某分类的名次与元信息（P34；已入库作品与其他分类不受影响）。
+
+        返回 (删除的名次条数, 是否删除元信息〔0/1〕)。
+        """
+        gid = str(genre_id)
+        with self.conn:
+            ranks = self.conn.execute(
+                "DELETE FROM genre_ranks WHERE genre_id=?", (gid,)
+            ).rowcount
+            info = self.conn.execute(
+                "DELETE FROM genre_info WHERE genre_id=?", (gid,)
+            ).rowcount
+        return int(ranks), int(info)
+
     def rank_trend_depth(self) -> int:
         """全站人气序的已记录深度（最大名次；未抓过返回 0）。"""
         row = self.conn.execute(

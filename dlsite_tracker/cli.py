@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import List, Optional
 
 from . import jobs
-from .config import Config, add_to_config_list, split_list
+from .config import Config, add_to_config_list, remove_from_config_list, split_list
 from .discovery import backfill as run_backfill
 from .discovery import (
     discover_from_sitemap,
@@ -392,6 +392,47 @@ def cmd_watch_genre(cfg: Config, args: argparse.Namespace) -> int:
     else:
         print(f"[分类人气] {genre_id} 已在每日刷新列表中")
     return 0
+
+
+def cmd_unwatch_genre(cfg: Config, args: argparse.Namespace) -> int:
+    """把分类移出每日刷新列表（P34；保留已抓名次数据）。"""
+    genre_id = str(args.genre).strip()
+    try:
+        changed, value = remove_from_config_list(
+            cfg.path, "discovery", "genre_rank_ids", genre_id
+        )
+    except OSError as exc:
+        LOG.error("配置写入失败：%s", exc)
+        return 1
+    if changed:
+        print(f"[分类人气] 已移出每日刷新：{genre_id}（genre_rank_ids = {value or '空'}）")
+    else:
+        print(f"[分类人气] {genre_id} 不在每日刷新列表中")
+    return 0
+
+
+def cmd_remove_genre(cfg: Config, args: argparse.Namespace) -> int:
+    """移除分类与其名次数据（P34；同时移出每日刷新；已入库作品保留）。"""
+    genre_id = str(args.genre).strip()
+    store = _open_store(cfg)
+    run_id = store.start_run("remove-genre")
+    try:
+        ranks, info = store.remove_genre(genre_id)
+        try:
+            unwatched, _ = remove_from_config_list(
+                cfg.path, "discovery", "genre_rank_ids", genre_id
+            )
+        except OSError as exc:
+            LOG.error("配置写入失败：%s", exc)
+            unwatched = False
+        store.finish_run(run_id, True, f"{genre_id} 名次 {ranks} 条 / 元信息 {info} 条")
+        print(
+            f"[分类人气] 已移除分类 {genre_id}：名次 {ranks} 条、元信息 {info} 条"
+            + ("（并移出每日刷新）" if unwatched else "")
+        )
+        return 0
+    finally:
+        store.close()
 
 
 def cmd_enrich(cfg: Config, args: argparse.Namespace) -> int:
@@ -1016,6 +1057,14 @@ def build_parser() -> argparse.ArgumentParser:
     watch = sub.add_parser("watch-genre", help="把分类加入每日刷新列表（写入配置）")
     watch.add_argument("genre", help="分类 id")
 
+    unwatch = sub.add_parser("unwatch-genre", help="把分类移出每日刷新列表（写入配置）")
+    unwatch.add_argument("genre", help="分类 id")
+
+    remove_genre = sub.add_parser(
+        "remove-genre", help="移除分类与其名次数据（同时移出每日刷新；作品保留）"
+    )
+    remove_genre.add_argument("genre", help="分类 id")
+
     backfill = sub.add_parser("backfill", help="sitemap 历史登记（仅入队，不富化）")
     backfill.add_argument("--all", action="store_true", help="登记全部分片（首次全量；游标可续跑）")
     backfill.add_argument("--last-shards", type=int, default=3, help="从最新分片向前登记的数量")
@@ -1132,6 +1181,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         return cmd_fetch_genre(cfg, args)
     if args.command == "watch-genre":
         return cmd_watch_genre(cfg, args)
+    if args.command == "unwatch-genre":
+        return cmd_unwatch_genre(cfg, args)
+    if args.command == "remove-genre":
+        return cmd_remove_genre(cfg, args)
     if args.command == "enrich":
         return cmd_enrich(cfg, args)
     if args.command == "backfill":

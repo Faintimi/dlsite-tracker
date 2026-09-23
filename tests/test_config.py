@@ -6,7 +6,13 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from dlsite_tracker.config import Config, add_to_config_list, parse_bool, split_list
+from dlsite_tracker.config import (
+    Config,
+    add_to_config_list,
+    parse_bool,
+    remove_from_config_list,
+    split_list,
+)
 
 
 class ConfigTest(unittest.TestCase):
@@ -75,6 +81,40 @@ class ConfigTest(unittest.TestCase):
             self.assertTrue(changed)
             self.assertEqual(value, "day,week,year")
             self.assertIn("rank_terms = day,week,year", path.read_text(encoding="utf-8"))
+        finally:
+            tmp.cleanup()
+
+    def test_remove_from_config_list(self):
+        tmp, path = self._write_config(
+            "[discovery]\n; 保留注释\ngenre_rank_ids = 526,016\nrank_terms = day\n"
+        )
+        try:
+            changed, value = remove_from_config_list(
+                path, "discovery", "genre_rank_ids", "526"
+            )
+            self.assertTrue(changed)
+            self.assertEqual(value, "016")
+            self.assertIn("genre_rank_ids = 016", path.read_text(encoding="utf-8"))
+            self.assertIn("; 保留注释", path.read_text(encoding="utf-8"))
+            # 不在列表中 → 不变更
+            changed, value = remove_from_config_list(
+                path, "discovery", "genre_rank_ids", "999"
+            )
+            self.assertFalse(changed)
+            self.assertEqual(value, "016")
+            # 移除最后一项 → 空值
+            changed, value = remove_from_config_list(
+                path, "discovery", "genre_rank_ids", "016"
+            )
+            self.assertTrue(changed)
+            self.assertEqual(value, "")
+            self.assertIn("genre_rank_ids =", path.read_text(encoding="utf-8"))
+            # 键 / 节不存在 → 不变更
+            changed, value = remove_from_config_list(path, "discovery", "missing", "X")
+            self.assertFalse(changed)
+            self.assertEqual(value, "")
+            changed, _ = remove_from_config_list(path, "other", "genre_rank_ids", "X")
+            self.assertFalse(changed)
         finally:
             tmp.cleanup()
 

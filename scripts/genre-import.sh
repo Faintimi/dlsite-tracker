@@ -1,11 +1,13 @@
 #!/bin/bash
-# 分类人气「现导入 / 载入更多 / 加入每日刷新」后端（应用按钮调用；P19.2）
+# 分类人气「现导入 / 载入更多 / 加入每日刷新 / 移出每日刷新 / 移除分类」后端（应用按钮调用；P19.2 / P34）
 #   import（默认）：抓分类人气页（前 N 页或 --more 续一页）→ 定向富化新作品 →
 #                    定向补封面 → 导出 out/works.json
 #   watch <id>     ：把分类加入每日刷新列表（写入 config 的 genre_rank_ids）
+#   unwatch <id>   ：把分类移出每日刷新列表（保留已抓名次数据）
+#   remove <id>    ：移除分类与其名次数据（同时移出每日刷新；已入库作品保留）
 #
 # 用法：bash scripts/genre-import.sh <genre_id> [--more] [--pages N]
-#       bash scripts/genre-import.sh watch <genre_id>
+#       bash scripts/genre-import.sh watch|unwatch|remove <genre_id>
 # 环境变量：DLST_PYTHON 指定 Python 解释器（默认 python3）
 # 状态：全过程写入 out/genre-progress.json（应用横幅读取）
 # 日志：data/genre.log
@@ -24,12 +26,19 @@ else
   PYTHON="/usr/bin/python3"
 fi
 
-if [ "${1:-}" = "watch" ]; then
-  shift
-  GENRE="${1:-}"
-  [ -n "$GENRE" ] || { echo "用法：bash scripts/genre-import.sh watch <genre_id>" >&2; exit 2; }
-  exec "$PYTHON" -m dlsite_tracker watch-genre "$GENRE"
-fi
+case "${1:-}" in
+  watch|unwatch|remove)
+    ACTION="$1"
+    shift
+    GENRE="${1:-}"
+    [ -n "$GENRE" ] || { echo "用法：bash scripts/genre-import.sh $ACTION <genre_id>" >&2; exit 2; }
+    case "$ACTION" in
+      watch) exec "$PYTHON" -m dlsite_tracker watch-genre "$GENRE" ;;
+      unwatch) exec "$PYTHON" -m dlsite_tracker unwatch-genre "$GENRE" ;;
+      remove) exec "$PYTHON" -m dlsite_tracker remove-genre "$GENRE" ;;
+    esac
+    ;;
+esac
 
 GENRE="${1:-}"
 [ -n "$GENRE" ] || { echo "用法：bash scripts/genre-import.sh <genre_id> [--more] [--pages N]" >&2; exit 2; }

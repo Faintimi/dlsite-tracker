@@ -82,6 +82,18 @@ class StoreTest(unittest.TestCase):
         self.assertEqual(self.store.genre_positions("RJ01000200"), {})
         self.assertEqual(self.store.genre_positions("RJ01000201"), {"016": 1})
 
+    def test_remove_genre(self):
+        """P34：移除分类——只删该分类的名次与元信息，其他分类与作品不受影响。"""
+        self.store.save_genre_info("016", "奇幻", 7190)
+        self.store.replace_genre_ranks("016", {"W1": 1, "W2": 320})
+        self.store.save_genre_info("526", "沉迷快乐", 1249)
+        ranks, info = self.store.remove_genre("016")
+        self.assertEqual((ranks, info), (2, 1))
+        self.assertEqual(self.store.genre_depth("016"), 0)
+        self.assertEqual([item["id"] for item in self.store.genre_summaries()], ["526"])
+        # 重复移除：无变更
+        self.assertEqual(self.store.remove_genre("016"), (0, 0))
+
     def test_genre_ranks_range_replace_keeps_deep(self):
         """P19.1：范围替换——每日刷新不抹掉更深的「载入更多」名次。"""
         self.store.replace_genre_ranks("526", {"A1": 1, "B1": 250, "C1": 300})

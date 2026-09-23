@@ -475,6 +475,64 @@ async fn run_export(app: AppHandle) -> Result<String, String> {
     }
 }
 
+/// 分类管理（unwatch=移出每日刷新；remove=移除分类与名次数据）。
+#[cfg(not(windows))]
+fn genre_admin(app: &AppHandle, action: &str, genre: &str) -> Result<String, String> {
+    let project_dir = project_dir_of(app)?;
+    let script = project_dir.join("scripts").join("genre-import.sh");
+    if !script.is_file() {
+        return Err(format!("未找到分类脚本：{}", script.display()));
+    }
+    let output = Command::new("/bin/bash")
+        .arg(&script)
+        .arg(action)
+        .arg(genre)
+        .current_dir(&project_dir)
+        .output()
+        .map_err(|e| format!("无法执行分类操作：{e}"))?;
+    if output.status.success() {
+        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        Err(if stderr.is_empty() { stdout } else { stderr })
+    }
+}
+
+#[cfg(windows)]
+fn genre_admin(app: &AppHandle, action: &str, genre: &str) -> Result<String, String> {
+    let project_dir = project_dir_of(app)?;
+    let cli = match action {
+        "unwatch" => "unwatch-genre",
+        "remove" => "remove-genre",
+        _ => return Err(format!("未知分类操作：{action}")),
+    };
+    let output = Command::new("python")
+        .args(["-m", "dlsite_tracker", cli, genre])
+        .current_dir(&project_dir)
+        .output()
+        .map_err(|e| format!("无法执行分类操作：{e}"))?;
+    if output.status.success() {
+        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        Err(if stderr.is_empty() { stdout } else { stderr })
+    }
+}
+
+/// 把分类移出每日刷新列表（保留已抓名次数据）。
+#[tauri::command]
+fn unwatch_genre(app: AppHandle, genre: String) -> Result<String, String> {
+    genre_admin(&app, "unwatch", &genre)
+}
+
+/// 移除分类与其名次数据（同时移出每日刷新；已入库作品保留）。
+#[tauri::command]
+fn remove_genre(app: AppHandle, genre: String) -> Result<String, String> {
+    genre_admin(&app, "remove", &genre)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -502,6 +560,8 @@ pub fn run() {
             cancel_import,
             start_genre_import,
             watch_genre,
+            unwatch_genre,
+            remove_genre,
             run_export
         ])
         .run(tauri::generate_context!())

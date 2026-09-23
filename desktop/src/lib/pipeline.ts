@@ -218,6 +218,16 @@ export function watchGenre(genre: string): Promise<string> {
   return invoke<string>("watch_genre", { genre });
 }
 
+/** 把分类移出每日刷新列表（保留已抓名次数据）。 */
+export function unwatchGenre(genre: string): Promise<string> {
+  return invoke<string>("unwatch_genre", { genre });
+}
+
+/** 移除分类与其名次数据（同时移出每日刷新；已入库作品保留）。 */
+export function removeGenre(genre: string): Promise<string> {
+  return invoke<string>("remove_genre", { genre });
+}
+
 /** 读取全部进度文件并解析（文件缺失或解析失败对应字段为 null）。 */
 export async function readProgress(): Promise<{
   state: UpdateState | null;

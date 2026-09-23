@@ -1,11 +1,13 @@
 <script lang="ts">
-  // 左筛选侧栏（固定 280px；逐项对齐 macOS ContentView.sidebar）
+  // 左筛选侧栏（固定 280px）：四个分区为独立卡片（边界清晰）、折叠带滑动动画（P34.1）
+  import { slide } from "svelte/transition";
   import type { GenreCatalogEntry, GenreEntry, WorkView } from "$lib/api";
   import type { FilterState, ViewFilter } from "$lib/filter";
-  import { yearOf } from "$lib/filter";
+  import { activeFilterCount, yearOf } from "$lib/filter";
   import type { FavoriteCollection, FollowedMaker } from "$lib/library.svelte";
   import type { GenreProgress, ImportProgress } from "$lib/pipeline";
   import { yearsLabel } from "$lib/pipeline";
+  import { prefs } from "$lib/prefs.svelte";
   import { ICONS, categoriesOf, formsOf } from "$lib/ui";
   import ContextMenu from "./ContextMenu.svelte";
   import ConfirmDialog from "./ConfirmDialog.svelte";
@@ -30,6 +32,9 @@
     onRenameCollection,
     onDeleteCollection,
     onGenreImport,
+    onGenreWatch,
+    onGenreUnwatch,
+    onGenreRemove,
     onClearFilters,
     onImportToggle,
     onCancelImport,
@@ -49,22 +54,29 @@
     onRenameCollection: (id: string, name: string) => void;
     onDeleteCollection: (id: string) => void;
     onGenreImport: (id: string, name: string) => void;
+    onGenreWatch: (id: string) => void;
+    onGenreUnwatch: (id: string) => void;
+    onGenreRemove: (id: string) => void;
     onClearFilters: () => void;
     onImportToggle: (on: boolean) => void;
     onCancelImport: () => void;
     onCancelFollow: (maker: FollowedMaker) => void;
   } = $props();
 
+  const SECTION_DURATION = 220;
+
   let genreSearch = $state("");
   let categorySearch = $state("");
 
-  let menu = $state<{ x: number; y: number; items: { label: string; action: () => void; danger?: boolean }[] } | null>(null);
+  let menu = $state<{ x: number; y: number; items: { label: string; action: () => void; danger?: boolean; divider?: boolean }[] } | null>(null);
   let editor = $state<{ mode: "new" | "rename"; id?: string } | null>(null);
   let editorName = $state("");
   let confirmDelete = $state<FavoriteCollection | null>(null);
   let yearPickOpen = $state(false);
   let yearPickValue = $state(new Date().getFullYear() - 5);
   let confirmCancelImport = $state(false);
+  let genresExpanded = $state(false);
+  let removeRequest = $state<{ id: string; name: string } | null>(null);
 
   // 分类 / 形式 / 年份候选（对齐 macOS categories / forms / releaseYears）
   const categories = $derived.by(() => {
@@ -120,6 +132,8 @@
   const importJobActive = $derived(importProgress?.phase === "enrich");
   const importRunning = $derived(importProgress?.running === true);
   const genreJobActive = $derived(genreProgress?.running === true);
+  const watchedCount = $derived(genres.filter((entry) => entry.watched).length);
+  const filterCount = $derived(activeFilterCount(filter));
 
   const importRangeOptions = $derived.by(() => {
     const options = [
@@ -149,6 +163,31 @@
     } else {
       onGenreImport(entry.id, entry.name);
     }
+  }
+
+  /** 分类行右键菜单：每日刷新开关 + 移除分类（未导入的行只有「现导入」） */
+  function openGenreMenu(entry: GenreEntry, event: MouseEvent): void {
+    event.preventDefault();
+    event.stopPropagation();
+    const items: { label: string; action: () => void; danger?: boolean; divider?: boolean }[] = [];
+    if ((entry.depth ?? 0) > 0) {
+      if (entry.watched) {
+        items.push({ label: "取消每日刷新", action: () => onGenreUnwatch(entry.id) });
+      } else {
+        items.push({ label: "加入每日刷新", action: () => onGenreWatch(entry.id) });
+      }
+      items.push({
+        label: "移除分类（含名次数据）…",
+        divider: true,
+        danger: true,
+        action: () => {
+          removeRequest = { id: entry.id, name: entry.name };
+        },
+      });
+    } else {
+      items.push({ label: "现导入（前 200 名）", action: () => onGenreImport(entry.id, entry.name) });
+    }
+    menu = { x: event.clientX, y: event.clientY, items };
   }
 
   function toggleIncludeCategory(name: string): void {
@@ -226,227 +265,299 @@
 </script>
 
 <aside class="sidebar">
-  <div class="section">
-    <div class="title">收藏</div>
-    <NavRow
-      icon={ICONS.gridAll}
-      title="全部作品"
-      count={works.length}
-      selected={viewFilter.kind === "all"}
-      onclick={() => (viewFilter = { kind: "all" })}
-    />
-    {#each collections as collection (collection.id)}
-      <NavRow
-        icon={ICONS.folder}
-        title={collection.name}
-        count={collection.work_ids.length}
-        selected={viewFilter.kind === "collection" && viewFilter.id === collection.id}
-        onclick={() => (viewFilter = { kind: "collection", id: collection.id })}
-        onmenu={(event) => openCollectionMenu(collection, event)}
-      />
-    {/each}
+  <section class="card">
     <button
-      class="link"
-      onclick={() => {
-        editorName = "";
-        editor = { mode: "new" };
-      }}
+      class="section-head"
+      title={prefs.data.sections.favorites ? "收起「收藏」" : "展开「收藏」"}
+      onclick={() => prefs.toggleSection("favorites", !prefs.data.sections.favorites)}
     >
-      <span class="link-icon">{@html ICONS.plus}</span>新建收藏夹
+      <span class="chev" class:open={prefs.data.sections.favorites}>{@html ICONS.chevronRight}</span>
+      <span class="title">收藏</span>
+      <span class="spacer"></span>
+      {#if !prefs.data.sections.favorites}
+        <span class="summary">
+          {collections.length} 收藏夹{makers.length > 0 ? ` · ${makers.length} 关注` : ""}
+        </span>
+      {/if}
     </button>
-    {#if makers.length > 0}
-      <div class="subtitle">关注的制作者</div>
-      {#each makers as maker (maker.key)}
+    {#if prefs.data.sections.favorites}
+      <div class="section-body" transition:slide={{ duration: SECTION_DURATION }}>
         <NavRow
-          icon={ICONS.personCircle}
-          title={maker.name}
-          selected={viewFilter.kind === "maker" && viewFilter.key === maker.key}
-          onclick={() => (viewFilter = { kind: "maker", key: maker.key, name: maker.name, makerId: maker.maker_id })}
-          onmenu={(event) => openMakerMenu(maker, event)}
+          icon={ICONS.gridAll}
+          title="全部作品"
+          count={works.length}
+          selected={viewFilter.kind === "all"}
+          onclick={() => (viewFilter = { kind: "all" })}
         />
-      {/each}
-    {/if}
-  </div>
-
-  <div class="divider"></div>
-
-  <div class="section">
-    <div class="title">分类人气</div>
-    <div class="block">
-      <input class="box" placeholder="搜索分类（官方全量目录）" bind:value={genreSearch} />
-      {#if genreEntries.length === 0}
-        <div class="hint">
-          {genres.length === 0
-            ? "尚无分类人气数据：先点「开始更新数据」，或输入分类名用「现导入」。"
-            : "没有匹配的分类。"}
-        </div>
-      {:else}
-        {#each genreEntries.slice(0, 24) as entry (entry.id)}
-          <button
-            class="genre-row"
-            class:selected={filter.genreFocus === entry.id}
-            title={(entry.depth ?? 0) > 0
-              ? `点击按「${entry.name}」官方人气名次浏览；再点取消`
-              : "尚未导入：点击现导入前 200 名"}
-            onclick={() => handleGenreTap(entry)}
-          >
-            <span class="genre-icon" class:selected={filter.genreFocus === entry.id}>
-              {@html filter.genreFocus === entry.id ? ICONS.chartBarFill : ICONS.chartBar}
-            </span>
-            <span class="genre-name">{entry.name}</span>
-            {#if genreJobActive && genreProgress?.genre_id === entry.id}
-              <span class="spin"></span>
-            {/if}
-            <span class="spacer"></span>
-            <span class="genre-tail">{genreTrailing(entry)}</span>
-          </button>
+        {#each collections as collection (collection.id)}
+          <NavRow
+            icon={ICONS.folder}
+            title={collection.name}
+            count={collection.work_ids.length}
+            selected={viewFilter.kind === "collection" && viewFilter.id === collection.id}
+            onclick={() => (viewFilter = { kind: "collection", id: collection.id })}
+            onmenu={(event) => openCollectionMenu(collection, event)}
+          />
         {/each}
-        {#if genreEntries.length > 24}
-          <div class="hint">还有 {genreEntries.length - 24} 个结果；继续输入可缩小范围</div>
+        <button
+          class="link"
+          onclick={() => {
+            editorName = "";
+            editor = { mode: "new" };
+          }}
+        >
+          <span class="link-icon">{@html ICONS.plus}</span>新建收藏夹
+        </button>
+        {#if makers.length > 0}
+          <div class="subtitle">关注的制作者</div>
+          {#each makers as maker (maker.key)}
+            <NavRow
+              icon={ICONS.personCircle}
+              title={maker.name}
+              selected={viewFilter.kind === "maker" && viewFilter.key === maker.key}
+              onclick={() => (viewFilter = { kind: "maker", key: maker.key, name: maker.name, makerId: maker.maker_id })}
+              onmenu={(event) => openMakerMenu(maker, event)}
+            />
+          {/each}
         {/if}
-      {/if}
-    </div>
-  </div>
-
-  <div class="divider"></div>
-
-  <div class="section">
-    <div class="title">筛选条件</div>
-    <div class="block">
-      <div class="cap">游戏名或制作者</div>
-      <input class="box" placeholder="搜索" bind:value={filter.keyword} />
-    </div>
-    <RangeFields title="评分区间" unit="星" bind:lower={filter.ratingLow} bind:upper={filter.ratingHigh} />
-    <label class="check">
-      <input type="checkbox" bind:checked={filter.includeUnrated} />
-      包含未评分作品
-    </label>
-    <RangeFields title="销量区间" unit="份" bind:lower={filter.salesLow} bind:upper={filter.salesHigh} />
-    <RangeFields title="价格区间" unit="日元" bind:lower={filter.priceLow} bind:upper={filter.priceHigh} />
-    <div class="block">
-      <div class="cap">分类 / 标签（已识别；多选取交集，同时满足全部所选）</div>
-      <input class="box" placeholder="搜索分类…" bind:value={categorySearch} />
-      {#if !categorySearch.trim()}
-        <SetFilterMenu
-          title="包含分类（交集）"
-          emptyLabel="全部"
-          options={categories}
-          selection={filter.genres}
-          onchange={(next) => (filter.genres = next)}
-        />
-        <SetFilterMenu
-          title="排除分类"
-          emptyLabel="不排除"
-          options={categories}
-          selection={filter.excludeGenres}
-          onchange={(next) => (filter.excludeGenres = next)}
-        />
-      {:else if categoryMatches.length === 0}
-        <div class="hint">没有匹配的分类</div>
-      {:else}
-        {#each categoryMatches as name (name)}
-          <button
-            class="cat-row"
-            class:selected={filter.genres.includes(name)}
-            onclick={() => toggleIncludeCategory(name)}
-            oncontextmenu={(event) => {
-              event.preventDefault();
-              toggleExcludeCategory(name);
-            }}
-          >
-            <span class="cat-name">{name}</span>
-            <span class="spacer"></span>
-            {#if filter.excludeGenres.includes(name)}<span class="tag">已排除</span>{/if}
-            {#if filter.genres.includes(name)}<span class="ck">{@html ICONS.check}</span>{/if}
-          </button>
-        {/each}
-      {/if}
-    </div>
-    <div class="block">
-      <div class="cap">作品形式（如 RPG、SLG）</div>
-      <select class="box" bind:value={filter.form}>
-        <option value="">全部</option>
-        {#each forms as form (form)}
-          <option value={form}>{form}</option>
-        {/each}
-      </select>
-    </div>
-    <div class="block">
-      <div class="cap">发售年份（可多选）</div>
-      <SetFilterMenu
-        title="包含年份"
-        emptyLabel="全部"
-        options={releaseYears.map(String)}
-        selection={filter.selectedYears.map(String)}
-        onchange={(next) => (filter.selectedYears = next.map(Number))}
-      />
-    </div>
-    <div class="block">
-      <div class="cap">内容标志（可多选，同时满足）</div>
-      <div class="flags">
-        <label class="check">
-          <input
-            type="checkbox"
-            checked={filter.flags.voice}
-            onchange={(event) => (filter.flags = { ...filter.flags, voice: event.currentTarget.checked })}
-          />
-          配音
-        </label>
-        <label class="check">
-          <input
-            type="checkbox"
-            checked={filter.flags.music}
-            onchange={(event) => (filter.flags = { ...filter.flags, music: event.currentTarget.checked })}
-          />
-          音乐
-        </label>
-        <label class="check">
-          <input
-            type="checkbox"
-            checked={filter.flags.video}
-            onchange={(event) => (filter.flags = { ...filter.flags, video: event.currentTarget.checked })}
-          />
-          动画
-        </label>
       </div>
-    </div>
-  </div>
+    {/if}
+  </section>
 
-  <div class="divider"></div>
-
-  <div class="section">
-    <div class="block">
-      <div class="cap">渐进导入（后台分批入库）</div>
-      <label class="check">
-        <input
-          type="checkbox"
-          checked={importRunning}
-          onchange={(event) => onImportToggle(event.currentTarget.checked)}
-        />
-        开启（关闭 = 暂停，可随时再开）
-      </label>
-      <select class="box" bind:value={importYears} disabled={importJobActive} aria-label="渐进导入范围">
-        {#each importRangeOptions as option (option.value)}
-          <option value={option.value}>{option.label}</option>
-        {/each}
-      </select>
-      <button class="link" disabled={importJobActive} onclick={() => (yearPickOpen = true)}>
-        自选起始年份…
-      </button>
-      {#if importJobActive}
-        <div class="hint">
-          当前任务：{yearsLabel(importProgress?.years ?? "1")} · {importRunning ? "进行中" : "已暂停"}
-        </div>
-        <button class="link" onclick={() => (confirmCancelImport = true)}>取消导入任务…</button>
+  <section class="card">
+    <button
+      class="section-head"
+      title={prefs.data.sections.genres ? "收起「分类人气」" : "展开「分类人气」"}
+      onclick={() => prefs.toggleSection("genres", !prefs.data.sections.genres)}
+    >
+      <span class="chev" class:open={prefs.data.sections.genres}>{@html ICONS.chevronRight}</span>
+      <span class="title">分类人气</span>
+      <span class="spacer"></span>
+      {#if !prefs.data.sections.genres}
+        <span class="summary">
+          {genres.length === 0
+            ? "暂无"
+            : `已导入 ${genres.length}${watchedCount > 0 ? ` · 每日刷新 ${watchedCount}` : ""}`}
+        </span>
       {/if}
-    </div>
-    <button class="link" onclick={clearFilters}>清空筛选</button>
-  </div>
+    </button>
+    {#if prefs.data.sections.genres}
+      <div class="section-body" transition:slide={{ duration: SECTION_DURATION }}>
+        <input class="box" placeholder="搜索分类（官方全量目录）" bind:value={genreSearch} />
+        {#if genreEntries.length === 0}
+          <div class="hint">
+            {genres.length === 0
+              ? "尚无分类人气数据：先点「开始更新数据」，或输入分类名用「现导入」。"
+              : "没有匹配的分类。"}
+          </div>
+        {:else}
+          {#each (genresExpanded ? genreEntries : genreEntries.slice(0, 12)) as entry (entry.id)}
+            <button
+              class="genre-row"
+              class:selected={filter.genreFocus === entry.id}
+              title={(entry.depth ?? 0) > 0
+                ? `点击按「${entry.name}」官方人气名次浏览；右键管理`
+                : "尚未导入：点击现导入前 200 名"}
+              onclick={() => handleGenreTap(entry)}
+              oncontextmenu={(event) => openGenreMenu(entry, event)}
+            >
+              <span class="genre-icon" class:selected={filter.genreFocus === entry.id}>
+                {@html filter.genreFocus === entry.id ? ICONS.chartBarFill : ICONS.chartBar}
+              </span>
+              <span class="genre-name">{entry.name}</span>
+              {#if genreJobActive && genreProgress?.genre_id === entry.id}
+                <span class="spin"></span>
+              {/if}
+              <span class="spacer"></span>
+              <span class="genre-tail">{genreTrailing(entry)}</span>
+            </button>
+          {/each}
+          {#if genreEntries.length > 12}
+            {#if genresExpanded}
+              <button class="link" onclick={() => (genresExpanded = false)}>收起</button>
+            {:else}
+              <button class="link" onclick={() => (genresExpanded = true)}>
+                显示全部（{genreEntries.length}）
+              </button>
+            {/if}
+          {/if}
+        {/if}
+      </div>
+    {/if}
+  </section>
 
-  <div class="spacer"></div>
-  <div class="footnote">
-    数据来自你导入的文件。「更新」重读同一文件；「开始更新数据」运行本地管道（导入 → 销量 → 封面 → 导出），完成后自动刷新。收藏与偏好保存在本机。
-  </div>
+  <section class="card">
+    <div class="head-row">
+      <button
+        class="section-head"
+        title={prefs.data.sections.filters ? "收起「筛选条件」" : "展开「筛选条件」"}
+        onclick={() => prefs.toggleSection("filters", !prefs.data.sections.filters)}
+      >
+        <span class="chev" class:open={prefs.data.sections.filters}>{@html ICONS.chevronRight}</span>
+        <span class="title">筛选条件</span>
+        <span class="spacer"></span>
+        {#if !prefs.data.sections.filters && filterCount > 0}
+          <span class="summary">已用 {filterCount} 项</span>
+        {/if}
+      </button>
+      <button class="link" onclick={clearFilters}>清空筛选</button>
+    </div>
+    {#if prefs.data.sections.filters}
+      <div class="section-body" transition:slide={{ duration: SECTION_DURATION }}>
+        <div class="block">
+          <div class="cap">游戏名或制作者</div>
+          <input class="box" placeholder="搜索" bind:value={filter.keyword} />
+        </div>
+        <div class="block">
+          <div class="cap">分类 / 标签（已识别；多选取交集，同时满足全部所选）</div>
+          <input class="box" placeholder="搜索分类…" bind:value={categorySearch} />
+          {#if !categorySearch.trim()}
+            <SetFilterMenu
+              title="包含分类（交集）"
+              emptyLabel="全部"
+              options={categories}
+              selection={filter.genres}
+              onchange={(next) => (filter.genres = next)}
+            />
+            <SetFilterMenu
+              title="排除分类"
+              emptyLabel="不排除"
+              options={categories}
+              selection={filter.excludeGenres}
+              onchange={(next) => (filter.excludeGenres = next)}
+            />
+          {:else if categoryMatches.length === 0}
+            <div class="hint">没有匹配的分类</div>
+          {:else}
+            {#each categoryMatches as name (name)}
+              <button
+                class="cat-row"
+                class:selected={filter.genres.includes(name)}
+                onclick={() => toggleIncludeCategory(name)}
+                oncontextmenu={(event) => {
+                  event.preventDefault();
+                  toggleExcludeCategory(name);
+                }}
+              >
+                <span class="cat-name">{name}</span>
+                <span class="spacer"></span>
+                {#if filter.excludeGenres.includes(name)}<span class="tag">已排除</span>{/if}
+                {#if filter.genres.includes(name)}<span class="ck">{@html ICONS.check}</span>{/if}
+              </button>
+            {/each}
+          {/if}
+        </div>
+        <button
+          class="more-toggle"
+          onclick={() => prefs.set("filtersMore", !prefs.data.filtersMore)}
+        >
+          <span class="chev" class:open={prefs.data.filtersMore}>{@html ICONS.chevronRight}</span>
+          更多筛选（评分 / 销量 / 价格 / 年份 / 形式 / 标志）
+        </button>
+        {#if prefs.data.filtersMore}
+          <div class="section-body" transition:slide={{ duration: SECTION_DURATION }}>
+            <RangeFields title="评分区间" unit="星" bind:lower={filter.ratingLow} bind:upper={filter.ratingHigh} />
+            <label class="check">
+              <input type="checkbox" bind:checked={filter.includeUnrated} />
+              包含未评分作品
+            </label>
+            <RangeFields title="销量区间" unit="份" bind:lower={filter.salesLow} bind:upper={filter.salesHigh} />
+            <RangeFields title="价格区间" unit="日元" bind:lower={filter.priceLow} bind:upper={filter.priceHigh} />
+            <div class="block">
+              <div class="cap">作品形式（如 RPG、SLG）</div>
+              <select class="box" bind:value={filter.form}>
+                <option value="">全部</option>
+                {#each forms as form (form)}
+                  <option value={form}>{form}</option>
+                {/each}
+              </select>
+            </div>
+            <div class="block">
+              <div class="cap">发售年份（可多选）</div>
+              <SetFilterMenu
+                title="包含年份"
+                emptyLabel="全部"
+                options={releaseYears.map(String)}
+                selection={filter.selectedYears.map(String)}
+                onchange={(next) => (filter.selectedYears = next.map(Number))}
+              />
+            </div>
+            <div class="block">
+              <div class="cap">内容标志（可多选，同时满足）</div>
+              <div class="flags">
+                <label class="check">
+                  <input
+                    type="checkbox"
+                    checked={filter.flags.voice}
+                    onchange={(event) => (filter.flags = { ...filter.flags, voice: event.currentTarget.checked })}
+                  />
+                  配音
+                </label>
+                <label class="check">
+                  <input
+                    type="checkbox"
+                    checked={filter.flags.music}
+                    onchange={(event) => (filter.flags = { ...filter.flags, music: event.currentTarget.checked })}
+                  />
+                  音乐
+                </label>
+                <label class="check">
+                  <input
+                    type="checkbox"
+                    checked={filter.flags.video}
+                    onchange={(event) => (filter.flags = { ...filter.flags, video: event.currentTarget.checked })}
+                  />
+                  动画
+                </label>
+              </div>
+            </div>
+          </div>
+        {/if}
+      </div>
+    {/if}
+  </section>
+
+  <section class="card">
+    <button
+      class="section-head"
+      title={prefs.data.sections.imports ? "收起「渐进导入」" : "展开「渐进导入」"}
+      onclick={() => prefs.toggleSection("imports", !prefs.data.sections.imports)}
+    >
+      <span class="chev" class:open={prefs.data.sections.imports}>{@html ICONS.chevronRight}</span>
+      <span class="title">渐进导入</span>
+      <span class="spacer"></span>
+      {#if !prefs.data.sections.imports && importJobActive}
+        <span class="summary">{importRunning ? "进行中" : "已暂停"}</span>
+      {/if}
+    </button>
+    {#if prefs.data.sections.imports}
+      <div class="section-body" transition:slide={{ duration: SECTION_DURATION }}>
+        <div class="cap">后台分批入库</div>
+        <label class="check">
+          <input
+            type="checkbox"
+            checked={importRunning}
+            onchange={(event) => onImportToggle(event.currentTarget.checked)}
+          />
+          开启（关闭 = 暂停，可随时再开）
+        </label>
+        <select class="box" bind:value={importYears} disabled={importJobActive} aria-label="渐进导入范围">
+          {#each importRangeOptions as option (option.value)}
+            <option value={option.value}>{option.label}</option>
+          {/each}
+        </select>
+        <button class="link" disabled={importJobActive} onclick={() => (yearPickOpen = true)}>
+          自选起始年份…
+        </button>
+        {#if importJobActive}
+          <div class="hint">
+            当前任务：{yearsLabel(importProgress?.years ?? "1")} · {importRunning ? "进行中" : "已暂停"}
+          </div>
+          <button class="link" onclick={() => (confirmCancelImport = true)}>取消导入任务…</button>
+        {/if}
+      </div>
+    {/if}
+  </section>
 </aside>
 
 {#if menu}
@@ -504,38 +615,106 @@
   />
 {/if}
 
+{#if removeRequest}
+  <ConfirmDialog
+    title="移除分类？"
+    message={`将删除「${removeRequest.name}」已抓取的人气名次数据，并移出每日刷新；已入库的作品会保留。`}
+    confirmLabel="移除"
+    danger
+    onconfirm={() => {
+      const request = removeRequest;
+      removeRequest = null;
+      if (request) onGenreRemove(request.id);
+    }}
+    oncancel={() => (removeRequest = null)}
+  />
+{/if}
+
 <style>
   .sidebar {
     width: 280px;
     flex: none;
-    background: var(--panel);
+    background: var(--bg);
     border-right: 1px solid var(--border);
     overflow-y: auto;
-    padding: 20px;
+    padding: 14px;
     display: flex;
     flex-direction: column;
-    gap: 16px;
+    gap: 10px;
   }
 
-  .section {
+  /* 分区 = 独立卡片：边界清晰、与主区卡片同一视觉语言 */
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 8px 12px 12px;
     display: flex;
     flex-direction: column;
-    gap: 7px;
+    gap: 6px;
+  }
+
+  .section-head {
+    appearance: none;
+    border: 0;
+    background: transparent;
+    color: var(--text);
+    font: inherit;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 4px;
+    margin: 0 -4px;
+    border-radius: 8px;
+    width: 100%;
+    cursor: default;
+    text-align: left;
+    transition: background 0.15s ease;
+  }
+
+  .section-head:hover {
+    background: color-mix(in srgb, var(--text) 5%, transparent);
+  }
+
+  .chev {
+    display: inline-flex;
+    color: var(--muted);
+    flex: none;
+    transition: transform 0.22s cubic-bezier(0.2, 0, 0, 1);
+  }
+
+  .chev.open {
+    transform: rotate(90deg);
   }
 
   .title {
-    font-size: 16px;
-    font-weight: 700;
+    font-size: 13.5px;
+    font-weight: 650;
+    letter-spacing: 0.1px;
   }
 
-  .subtitle {
-    font-size: 12px;
+  .summary {
+    font-size: 11.5px;
     color: var(--muted);
-    padding-top: 2px;
+    font-weight: 400;
+    white-space: nowrap;
   }
 
-  .divider {
-    border-top: 1px solid var(--border);
+  .head-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .head-row .section-head {
+    flex: 1;
+  }
+
+  .section-body {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding-top: 2px;
   }
 
   .block {
@@ -553,12 +732,17 @@
     border: 1px solid var(--border);
     background: var(--bg);
     color: var(--text);
-    border-radius: 7px;
+    border-radius: 8px;
     padding: 5px 8px;
     font-size: 12.5px;
     font-family: inherit;
     width: 100%;
     min-width: 0;
+  }
+
+  .box:focus-visible {
+    outline: none;
+    border-color: color-mix(in srgb, var(--accent) 60%, var(--border));
   }
 
   .hint {
@@ -580,6 +764,12 @@
     padding: 2px 0;
     cursor: default;
     text-align: left;
+    white-space: nowrap;
+    transition: opacity 0.15s ease;
+  }
+
+  .link:hover {
+    opacity: 0.75;
   }
 
   .link:disabled {
@@ -589,6 +779,28 @@
 
   .link-icon {
     display: inline-flex;
+  }
+
+  .more-toggle {
+    appearance: none;
+    border: 0;
+    background: transparent;
+    color: var(--text);
+    font: inherit;
+    font-size: 12.5px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 4px;
+    margin: 0 -4px;
+    border-radius: 8px;
+    cursor: default;
+    text-align: left;
+    transition: background 0.15s ease;
+  }
+
+  .more-toggle:hover {
+    background: color-mix(in srgb, var(--text) 5%, transparent);
   }
 
   .genre-row,
@@ -602,10 +814,11 @@
     align-items: center;
     gap: 8px;
     padding: 5px 8px;
-    border-radius: 7px;
+    border-radius: 8px;
     cursor: default;
     text-align: left;
     width: 100%;
+    transition: background 0.15s ease;
   }
 
   .genre-row:hover,
@@ -677,6 +890,12 @@
     cursor: default;
   }
 
+  .subtitle {
+    font-size: 12px;
+    color: var(--muted);
+    padding-top: 2px;
+  }
+
   .spin {
     width: 12px;
     height: 12px;
@@ -693,11 +912,9 @@
     }
   }
 
-  .footnote {
-    font-size: 11.5px;
-    color: var(--muted);
-    opacity: 0.8;
-    line-height: 17px;
-    padding-top: 10px;
+  @media (prefers-reduced-motion: reduce) {
+    .chev {
+      transition: none;
+    }
   }
 </style>

@@ -92,9 +92,26 @@ export function emptyFilter(): FilterState {
   };
 }
 
+/** 生效中的筛选条件数量（供侧栏「筛选条件」标题摘要）。 */
+export function activeFilterCount(f: FilterState): number {
+  let count = 0;
+  if (f.keyword.trim()) count += 1;
+  count += f.genres.length + f.excludeGenres.length;
+  if (f.ratingLow.trim() || f.ratingHigh.trim()) count += 1;
+  if (f.includeUnrated) count += 1;
+  if (f.salesLow.trim() || f.salesHigh.trim()) count += 1;
+  if (f.priceLow.trim() || f.priceHigh.trim()) count += 1;
+  if (f.form) count += 1;
+  count += f.selectedYears.length;
+  if (f.flags.voice) count += 1;
+  if (f.flags.music) count += 1;
+  if (f.flags.video) count += 1;
+  if (f.genreFocus) count += 1;
+  return count;
+}
+
 /** 作者键（与 macOS 版一致：优先 maker_id，否则 `n:名称`）。 */
-export function makerKeyOf(maker: string, makerId: string | null | undefined): string {
-  const id = makerId ?? "";
+export function makerKeyOf(maker: string, makerId: string | null | undefined): string {  const id = makerId ?? "";
   return id ? id : `n:${maker}`;
 }
 

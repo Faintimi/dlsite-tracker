@@ -208,3 +208,41 @@ def add_to_config_list(path: Path, section: str, key: str, item: str) -> Tuple[b
         lines.extend(["", header, f"{key} = {item}"])
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return True, item
+
+
+def remove_from_config_list(path: Path, section: str, key: str, item: str) -> Tuple[bool, str]:
+    """从 INI 的逗号列表中移除 item（P34；行级编辑，保留注释与既有顺序）。
+
+    返回 (是否发生变更, 变更后的完整列表文本)。
+    - 节/键不存在、或 item 不在列表中：返回 (False, 当前列表文本或 "")；
+    - 移除后列表为空：写回 `key =`（空值）。
+    """
+    path = Path(path).expanduser()
+    item = str(item).strip()
+    lines = path.read_text(encoding="utf-8").splitlines()
+    header = f"[{section}]"
+    section_start = -1
+    for index, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped.startswith("[") and stripped.endswith("]"):
+            if section_start >= 0:
+                break  # 已越过目标节，查找结束
+            if stripped == header:
+                section_start = index
+            continue
+        if section_start >= 0 and "=" in stripped and not stripped.startswith(("#", ";")):
+            name, _, value = stripped.partition("=")
+            if name.strip() == key:
+                items = [
+                    part.strip()
+                    for part in value.replace("，", ",").split(",")
+                    if part.strip()
+                ]
+                if item not in items:
+                    return False, ",".join(items)
+                items.remove(item)
+                text_value = ",".join(items)
+                lines[index] = f"{key} = {text_value}".rstrip()
+                path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+                return True, text_value
+    return False, ""
