@@ -6,6 +6,7 @@ import json
 import tempfile
 import types
 import unittest
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from dlsite_tracker.export import (
@@ -76,7 +77,7 @@ class ExportTest(unittest.TestCase):
 
         paths = write_export(self.out, records)
         payload = json.loads(Path(paths["json"]).read_text(encoding="utf-8"))
-        self.assertEqual(payload["schema_version"], 2)
+        self.assertEqual(payload["schema_version"], 3)
         self.assertEqual(payload["count"], 1)
         self.assertEqual(payload["works"][0]["id"], "RJ1")
 
@@ -87,6 +88,24 @@ class ExportTest(unittest.TestCase):
         self.assertIn("rank_day_current", csv_text.splitlines()[0])
         self.assertIn("rank_trend_current", csv_text.splitlines()[0])
         self.assertIn("RJ1", csv_text)
+
+    def test_discovery_signals(self):
+        self._add_work("RJ9", wishlist_count=456)
+        now = datetime.now().astimezone()
+        old = (now - timedelta(days=2)).isoformat(timespec="seconds")
+        fresh = now.isoformat(timespec="seconds")
+        for when, sales in ((old, 100), (fresh, 550)):
+            self.store.conn.execute(
+                "INSERT OR REPLACE INTO sales_history(workno,sales,seen_at,source) "
+                "VALUES('RJ9',?,?,'t')",
+                (sales, when),
+            )
+        self.store.conn.commit()
+
+        records = fetch_records(self.store, self.out)
+        self.assertEqual(records[0]["wishlist_count"], 456)
+        self.assertEqual(records[0]["sales_delta"], 450)
+        self.assertEqual(records[0]["sales_delta_days"], 2)
 
     def test_genre_meta_payload_fields(self):
         self._add_work("RJ1")
@@ -105,7 +124,7 @@ class ExportTest(unittest.TestCase):
             trend={"depth": self.store.rank_trend_depth(), "seen_at": "2026-09-22T12:00:00+08:00"},
         )
         payload = json.loads(Path(paths["json"]).read_text(encoding="utf-8"))
-        self.assertEqual(payload["schema_version"], 2)
+        self.assertEqual(payload["schema_version"], 3)
         self.assertEqual(payload["genres"][0]["id"], "016")
         self.assertEqual(payload["genres"][0]["depth"], 7)
         self.assertEqual(payload["genres"][0]["count"], 7190)

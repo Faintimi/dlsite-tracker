@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from dlsite_tracker.store import Store
@@ -283,6 +284,42 @@ class StoreTest(unittest.TestCase):
         stats = self.store.stats()
         self.assertEqual(stats["works"], 1)
         self.assertEqual(stats["pending"], 1)
+
+    def test_sales_deltas_window(self):
+        now = datetime.now().astimezone()
+        old = (now - timedelta(days=3)).isoformat(timespec="seconds")
+        fresh = now.isoformat(timespec="seconds")
+        for when, sales in ((old, 100), (fresh, 340)):
+            self.store.conn.execute(
+                "INSERT OR REPLACE INTO sales_history(workno,sales,seen_at,source) "
+                "VALUES('RJ1',?,?,'t')",
+                (sales, when),
+            )
+        self.store.conn.commit()
+
+        deltas = self.store.sales_deltas(7)
+        self.assertEqual(deltas["RJ1"], {"delta": 240, "days": 3})
+
+    def test_sales_deltas_skips_insufficient_history(self):
+        now = datetime.now().astimezone()
+        stale = (now - timedelta(days=30)).isoformat(timespec="seconds")
+        fresh = now.isoformat(timespec="seconds")
+        rows = (
+            ("RJ2", 10, stale, "t"),  # 窗口外
+            ("RJ2", 20, fresh, "t"),  # 窗口内仅一条 → 跳过
+            ("RJ3", 5, fresh, "t"),   # 单条 → 跳过
+            ("RJ4", 5, fresh, "s1"),  # 同一时刻多来源 → 跨度为零 → 跳过
+            ("RJ4", 5, fresh, "s2"),
+        )
+        for workno, sales, when, source in rows:
+            self.store.conn.execute(
+                "INSERT OR REPLACE INTO sales_history(workno,sales,seen_at,source) "
+                "VALUES(?,?,?,?)",
+                (workno, sales, when, source),
+            )
+        self.store.conn.commit()
+
+        self.assertEqual(self.store.sales_deltas(7), {})
 
     def test_import_job_lifecycle(self):
         self.assertIsNone(self.store.get_import_job())

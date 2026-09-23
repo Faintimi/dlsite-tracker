@@ -39,7 +39,7 @@ npm run check        # svelte-check 类型检查
 
 ## 与数据管道的关系
 
-应用读取管道导出的 `out/works.json`（schema v2）与同目录 `covers/`；采集与维护始终由根目录 `dlsite_tracker` 完成（用法见仓库根 README）。「更新数据」按钮只是在本机启动固定任务链。
+应用读取管道导出的 `out/works.json`（schema v3）与同目录 `covers/`；采集与维护始终由根目录 `dlsite_tracker` 完成（用法见仓库根 README）。「更新数据」按钮只是在本机启动固定任务链。
 
 **两种管道模式**（自动判定）：
 

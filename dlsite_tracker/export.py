@@ -2,8 +2,8 @@
 
 导出字段约定：
 - JSON：``{schema_version, generated_at, count, works, genres, genre_catalog, trend}``
-  （schema v2 / P19.1：每件作品含 ``genre_pos`` 分类人气名次；附分类人气/目录/人气序元信息；
-  应用接受数组或含 works 的对象）
+  （schema v3：每件作品含 ``genre_pos`` 分类人气名次与发现系统信号——
+  ``wishlist_count`` / ``sales_delta`` / ``sales_delta_days``；应用接受数组或含 works 的对象）
 - CSV：同字段表格版，UTF-8 带 BOM（Excel 直接打开不乱码）
 - ``image_path``：相对 out/ 的路径（``covers/<file>``）；文件不存在时为空串
 """
@@ -25,7 +25,8 @@ from .store import Store
 
 LOG = logging.getLogger("dlsite_tracker.export")
 
-SCHEMA_VERSION = 2  # v2（P19.1）：genre_pos / genres / genre_catalog / trend / rank_trend_current
+SCHEMA_VERSION = 3  # v3（发现系统）；v2（P19.1）曾增补 genre_pos 等字段
+SALES_DELTA_WINDOW_DAYS = 7  # 销量增量窗口（天）——「冲刺中」信号的计算跨度
 
 # 导出/查询共用的列集合（供 export 与 serve 复用）
 WORK_SELECT = """
@@ -36,12 +37,14 @@ SELECT w.workno, w.site, w.product_name, w.maker_name, w.maker_id, w.work_type, 
        w.rank_day_current, w.rank_week_current, w.rank_month_current,
        w.rank_trend_current,
        w.rank_current_seen_at,
-       w.regist_date, w.sales_seen_at, w.genres_json, w.options
+       w.regist_date, w.sales_seen_at, w.genres_json, w.options, w.wishlist_count
 FROM works w
 """
 
 CSV_COLUMNS = [
-    "id", "title", "maker", "category", "form", "sales", "rating", "price",
+    "id", "title", "maker", "category", "form", "sales",
+    "sales_delta", "sales_delta_days", "wishlist_count",
+    "rating", "price",
     "image_path", "url", "official_price", "discount_rate", "rating_count",
     "rank_day", "rank_week", "rank_month",
     "rank_day_date", "rank_week_date", "rank_month_date",
@@ -136,6 +139,7 @@ def build_record(
         "category": " | ".join(genre_names),
         "form": row["work_type_string"] or "",
         "sales": row["sales"],
+        "wishlist_count": row["wishlist_count"],
         "rating": row["rating_star"],
         "price": row["price"],
         "image_path": cover_rel,
@@ -172,7 +176,11 @@ def fetch_records(
     out_dir: Path,
     work_types: Optional[Sequence[str]] = None,
 ) -> List[Dict[str, Any]]:
-    """读取已富化作品并生成导出记录（按作品号稳定排序）。"""
+    """读取已富化作品并生成导出记录（按作品号稳定排序）。
+
+    附「发现系统」信号：``wishlist_count``（期待型）与 ``sales_delta`` /
+    ``sales_delta_days``（窗口内销量首尾快照差，冲刺型）。
+    """
     clauses = ["w.enriched_at IS NOT NULL", "w.product_name IS NOT NULL"]
     args: List[Any] = []
     if work_types:
@@ -183,17 +191,21 @@ def fetch_records(
     rows = store.conn.execute(sql, args).fetchall()
     genre_map = load_genre_map(store.conn)
     position_map = load_genre_positions(store.conn)
+    delta_map = store.sales_deltas(SALES_DELTA_WINDOW_DAYS)
     records: List[Dict[str, Any]] = []
     for row in rows:
         names = genre_map.get(row["workno"]) or _genre_names_from_snapshot(row)
-        records.append(
-            build_record(
-                row,
-                names,
-                find_cover(out_dir, row["workno"]),
-                position_map.get(row["workno"]),
-            )
+        record = build_record(
+            row,
+            names,
+            find_cover(out_dir, row["workno"]),
+            position_map.get(row["workno"]),
         )
+        delta = delta_map.get(row["workno"])
+        if delta:
+            record["sales_delta"] = delta["delta"]
+            record["sales_delta_days"] = delta["days"]
+        records.append(record)
     return records
 
 
@@ -202,7 +214,7 @@ def _render_csv(records: Sequence[Dict[str, Any]]) -> str:
     writer = csv.DictWriter(buffer, fieldnames=CSV_COLUMNS, extrasaction="ignore")
     writer.writeheader()
     for record in records:
-        writer.writerow(record)
+        writer.writerow({key: ("" if value is None else value) for key, value in record.items()})
     return "\ufeff" + buffer.getvalue()  # BOM：Windows Excel 兼容
 
 

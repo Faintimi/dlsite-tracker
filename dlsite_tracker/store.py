@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import math
 import sqlite3
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -783,6 +784,40 @@ class Store:
                     "UPDATE works SET options=?, updated_at=? WHERE workno=?",
                     (tokens, seen_at, workno),
                 )
+
+    def sales_deltas(self, window_days: int = 7) -> Dict[str, Dict[str, int]]:
+        """窗口内销量增量（首尾快照差）：``{workno: {"delta": int, "days": int}}``。
+
+        仅统计窗口内至少两条不同时刻快照的作品；``days`` = 首尾快照实际跨度
+        （天，向上取整、至少 1）。供导出层生成「冲刺中」信号（发现系统）。
+        """
+        cutoff = (datetime.now().astimezone() - timedelta(days=window_days)).isoformat(
+            timespec="seconds"
+        )
+        rows = self.conn.execute(
+            "SELECT workno, sales, seen_at FROM sales_history WHERE seen_at >= ? "
+            "ORDER BY workno, seen_at, source",
+            (cutoff,),
+        ).fetchall()
+        first: Dict[str, Tuple[str, int]] = {}
+        last: Dict[str, Tuple[str, int]] = {}
+        for row in rows:
+            workno = row["workno"]
+            if workno not in first:
+                first[workno] = (row["seen_at"], int(row["sales"]))
+            last[workno] = (row["seen_at"], int(row["sales"]))
+        deltas: Dict[str, Dict[str, int]] = {}
+        for workno, (first_seen, first_sales) in first.items():
+            last_seen, last_sales = last[workno]
+            if first_seen == last_seen:
+                continue  # 窗口内只有同一时刻的记录（多来源），跨度为零
+            try:
+                span = datetime.fromisoformat(last_seen) - datetime.fromisoformat(first_seen)
+            except ValueError:
+                continue
+            days = max(1, math.ceil(span.total_seconds() / 86400))
+            deltas[workno] = {"delta": last_sales - first_sales, "days": days}
+        return deltas
 
     def works_for_sales_sync(
         self, stale_days: Optional[int] = None, limit: Optional[int] = None

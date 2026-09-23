@@ -39,7 +39,7 @@ npm run check        # svelte-check type checking
 
 ## Relation to the data pipeline
 
-The app reads the pipeline's exported `out/works.json` (schema v2) and the neighbouring `covers/`; collection and maintenance stay with `dlsite_tracker` at the repository root (see the root README). The "Update" button merely launches the fixed task chains on your machine.
+The app reads the pipeline's exported `out/works.json` (schema v3) and the neighbouring `covers/`; collection and maintenance stay with `dlsite_tracker` at the repository root (see the root README). The "Update" button merely launches the fixed task chains on your machine.
 
 **Two pipeline modes** (auto-detected):
 
