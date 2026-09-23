@@ -11,10 +11,12 @@ import json
 import logging
 import os
 import signal
+import sys
 import time
 from pathlib import Path
 from typing import List, Optional
 
+from . import jobs
 from .config import Config, add_to_config_list, split_list
 from .discovery import backfill as run_backfill
 from .discovery import (
@@ -591,24 +593,19 @@ def _pause_import(cfg: Config) -> int:
     except OSError as exc:
         print(f"[导入] 无法写入暂停标志：{exc}")
         return 1
-    if pid > 0:
+    if pid > 0 and os.name != "nt":
         try:
             os.kill(pid, signal.SIGINT)  # 尽力：前台进程即时响应；后台进程忽略则靠标志
         except (ProcessLookupError, PermissionError):
             pass
+    # Windows：不发送信号（无 POSIX 语义），暂停以标志文件为准（导入循环每页/每件检查）
     print("[导入] 已请求暂停；断点自动保存，再开即续传")
     return 0
 
 
 def _pid_alive(pid: int) -> bool:
-    """进程存活探测（信号 0）。"""
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    return True
+    """进程存活探测（跨平台；Windows 走 OpenProcess，避免信号 0 的误杀语义）。"""
+    return jobs.process_alive(pid)
 
 
 def _stop_running_import(cfg: Config, wait_seconds: float = 10.0) -> None:
@@ -634,21 +631,39 @@ def _stop_running_import(cfg: Config, wait_seconds: float = 10.0) -> None:
             flag.write_text("stop\n", encoding="utf-8")
         except OSError:
             pass
-        for sig, label, wait in (
-            (signal.SIGINT, "SIGINT", wait_seconds),
-            (signal.SIGTERM, "SIGTERM", 3.0),
-            (signal.SIGKILL, "SIGKILL", 2.0),
-        ):
-            if not _pid_alive(pid):
-                break
-            try:
-                os.kill(pid, sig)
-            except (ProcessLookupError, PermissionError):
-                break
-            print(f"[导入] 已发送 {label}（PID {pid}）")
-            deadline = time.time() + wait
-            while time.time() < deadline and _pid_alive(pid):
-                time.sleep(0.2)
+        if os.name == "nt":
+            # Windows：无 POSIX 信号语义；标志文件 + taskkill /T /F（连同子进程树）
+            if _pid_alive(pid):
+                print(f"[导入] 正在结束导入进程（taskkill /T /F，PID {pid}）")
+                try:
+                    import subprocess as _subprocess
+
+                    _subprocess.run(
+                        ["taskkill", "/PID", str(pid), "/T", "/F"],
+                        capture_output=True,
+                        check=False,
+                    )
+                except OSError as exc:
+                    print(f"[导入] taskkill 调用失败：{exc}")
+                deadline = time.time() + wait_seconds
+                while time.time() < deadline and _pid_alive(pid):
+                    time.sleep(0.2)
+        else:
+            for sig, label, wait in (
+                (signal.SIGINT, "SIGINT", wait_seconds),
+                (signal.SIGTERM, "SIGTERM", 3.0),
+                (signal.SIGKILL, "SIGKILL", 2.0),
+            ):
+                if not _pid_alive(pid):
+                    break
+                try:
+                    os.kill(pid, sig)
+                except (ProcessLookupError, PermissionError):
+                    break
+                print(f"[导入] 已发送 {label}（PID {pid}）")
+                deadline = time.time() + wait
+                while time.time() < deadline and _pid_alive(pid):
+                    time.sleep(0.2)
         print(
             "[导入] 导入进程已退出"
             if not _pid_alive(pid)
@@ -930,6 +945,21 @@ def cmd_sales(cfg: Config, args: argparse.Namespace) -> int:
         store.close()
 
 
+def cmd_task(cfg: Config, args: argparse.Namespace) -> int:
+    """链式任务入口（跨平台；scripts/daily.sh 等脚本为其薄包装）。"""
+    paths = jobs.JobPaths(data_dir=cfg.data_dir, out_dir=cfg.out_dir)
+    python = sys.executable or "python3"
+    if args.chain == "daily":
+        return jobs.run_daily(paths, python=python)
+    if args.chain == "quick":
+        return jobs.run_quick(paths, python=python)
+    try:
+        return jobs.run_update_all(paths, years=args.range or "1", python=python)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="dlsite_tracker",
@@ -1061,6 +1091,18 @@ def build_parser() -> argparse.ArgumentParser:
     serve = sub.add_parser("serve", help="启动本地只读 API（仅 127.0.0.1）")
     serve.add_argument("--host", default=None, help="仅允许回环地址（127.0.0.1/localhost）")
     serve.add_argument("--port", type=int, default=None)
+
+    task = sub.add_parser(
+        "task", help="链式任务：daily / quick / update-all（跨平台；scripts/*.sh 的底层实现）"
+    )
+    task.add_argument("chain", choices=["daily", "quick", "update-all"], help="要执行的链")
+    task.add_argument(
+        "range",
+        nargs="?",
+        default=None,
+        metavar="1-30|all|since:YYYY|deeper:N",
+        help="仅 update-all 使用（默认 1）",
+    )
     return parser
 
 
@@ -1106,6 +1148,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         return cmd_images(cfg, args)
     if args.command == "serve":
         return cmd_serve(cfg, args)
+    if args.command == "task":
+        return cmd_task(cfg, args)
     parser.print_help()
     return 0
 
