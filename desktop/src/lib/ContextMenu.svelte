@@ -3,6 +3,9 @@
     label: string;
     action: () => void;
     danger?: boolean;
+    disabled?: boolean;
+    /** 该项之前插入分隔线（对齐 macOS 菜单分组） */
+    divider?: boolean;
   }
 
   let {
@@ -48,7 +51,15 @@
 
 <div class="menu" style="left: {left}px; top: {top}px; width: {WIDTH}px">
   {#each items as item, index (index)}
-    <button class="item" class:danger={item.danger} onclick={() => pick(item.action)}>
+    {#if item.divider && index > 0}
+      <div class="hr"></div>
+    {/if}
+    <button
+      class="item"
+      class:danger={item.danger}
+      disabled={item.disabled}
+      onclick={() => pick(item.action)}
+    >
       {item.label}
     </button>
   {/each}
@@ -87,7 +98,19 @@
     background: var(--bg);
   }
 
+  .item:disabled {
+    color: var(--muted);
+    opacity: 0.55;
+    cursor: default;
+    background: transparent;
+  }
+
   .item.danger {
     color: #d64545;
+  }
+
+  .hr {
+    border-top: 1px solid var(--border);
+    margin: 4px 6px;
   }
 </style>

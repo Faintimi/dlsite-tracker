@@ -1,5 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { LogicalPosition, LogicalSize } from "@tauri-apps/api/dpi";
+  import { currentMonitor as currentWindowMonitor, getCurrentWindow } from "@tauri-apps/api/window";
   import { openUrl } from "@tauri-apps/plugin-opener";
   import {
     getDataPath,
@@ -9,66 +11,142 @@
     type WorkView,
   } from "$lib/api";
   import {
-    activeFilterCount,
     applyFilters,
     emptyFilter,
     makerKeyOf,
     SORT_OPTIONS,
-    yearOf,
+    viewFilterTitle,
     type FilterState,
     type SortKey,
+    type ViewFilter,
   } from "$lib/filter";
-  import FilterPanel from "$lib/FilterPanel.svelte";
-  import HoverCard from "$lib/HoverCard.svelte";
   import ContextMenu from "$lib/ContextMenu.svelte";
+  import HoverPanel from "$lib/HoverPanel.svelte";
   import UpdateBanner from "$lib/UpdateBanner.svelte";
+  import ConfirmDialog from "$lib/ConfirmDialog.svelte";
+  import PromptDialog from "$lib/PromptDialog.svelte";
+  import YearPickerDialog from "$lib/YearPickerDialog.svelte";
+  import Sidebar from "$lib/Sidebar.svelte";
   import { DEFAULT_COLLECTION_NAME, library } from "$lib/library.svelte";
+  import { prefs } from "$lib/prefs.svelte";
+  import { ICONS } from "$lib/ui";
+  import CompactRow from "$lib/CompactRow.svelte";
+  import CoverTile from "$lib/CoverTile.svelte";
+  import LargeRow from "$lib/LargeRow.svelte";
+  import MediumCard from "$lib/MediumCard.svelte";
   import {
     ACTIVE_PHASES,
+    cancelImport,
+    genreSummary,
+    importSummary,
+    importSwitch,
     isRunning,
+    isStale,
     readProgress,
+    startGenreImport,
     startUpdate,
+    updateSummary,
+    watchGenre,
+    type GenreProgress,
+    type ImportCoverage,
     type ImportProgress,
     type UpdateState,
   } from "$lib/pipeline";
 
   type Status = "empty" | "loading" | "ready" | "error";
-  type ViewMode = "grid" | "wall" | "info" | "compact" | "strip";
+  type ViewMode = "largeCards" | "twoColumn" | "compact" | "adaptiveGrid" | "coverWall";
 
   interface ViewCfg {
     label: string;
-    kind: "grid" | "list";
-    itemW: number;
+    shortcut: string;
+    icon: string;
+    kind: "list" | "grid";
     itemH: number;
+    minW: number;
+    maxW?: number;
+    maxCols?: number;
     gap: number;
   }
 
-  // 视图配置：卡片尺寸需与样式中的对应类保持一致
+  // 显示模式（严格对齐 macOS DisplayMode：名称 / 快捷键 ⌘1–5 / 图标）
   const VIEWS: Record<ViewMode, ViewCfg> = {
-    grid: { label: "网格卡", kind: "grid", itemW: 172, itemH: 314, gap: 14 },
-    wall: { label: "封面墙", kind: "grid", itemW: 200, itemH: 280, gap: 14 },
-    info: { label: "底部信息栏", kind: "grid", itemW: 200, itemH: 280, gap: 14 },
-    compact: { label: "紧凑列表", kind: "list", itemW: 0, itemH: 56, gap: 6 },
-    strip: { label: "横条", kind: "list", itemW: 0, itemH: 128, gap: 8 },
+    largeCards: {
+      label: "大卡列表",
+      shortcut: "1",
+      icon: ICONS.modeLarge,
+      kind: "list",
+      itemH: 194,
+      minW: 0,
+      gap: 10,
+    },
+    twoColumn: {
+      label: "双列卡片",
+      shortcut: "2",
+      icon: ICONS.modeTwo,
+      kind: "grid",
+      itemH: 226,
+      minW: 296,
+      maxCols: 2,
+      gap: 12,
+    },
+    compact: {
+      label: "紧凑列表",
+      shortcut: "3",
+      icon: ICONS.modeCompact,
+      kind: "list",
+      itemH: 78,
+      minW: 0,
+      gap: 6,
+    },
+    adaptiveGrid: {
+      label: "自适应网格",
+      shortcut: "4",
+      icon: ICONS.modeGrid,
+      kind: "grid",
+      itemH: 226,
+      minW: 296,
+      maxCols: 4,
+      gap: 12,
+    },
+    coverWall: {
+      label: "封面墙",
+      shortcut: "5",
+      icon: ICONS.modeWall,
+      kind: "grid",
+      itemH: 196,
+      minW: 150,
+      maxW: 230,
+      gap: 14,
+    },
   };
-  const VIEW_ORDER: ViewMode[] = ["grid", "wall", "info", "compact", "strip"];
+  const VIEW_ORDER: ViewMode[] = ["largeCards", "twoColumn", "compact", "adaptiveGrid", "coverWall"];
+
+  function normalizeView(value: string): ViewMode {
+    return (VIEW_ORDER as string[]).includes(value) ? (value as ViewMode) : "largeCards";
+  }
 
   let status = $state<Status>("empty");
   let errorMessage = $state("");
   let data = $state<LoadedData | null>(null);
 
-  let view = $state<ViewMode>("grid");
+  let view = $state<ViewMode>(normalizeView(prefs.data.displayMode));
   let sort = $state<SortKey>("sales");
   let filter = $state<FilterState>(emptyFilter());
-  let showFilters = $state(false);
-  // 右键菜单（作品上下文操作）
-  let menu = $state<{ x: number; y: number; work: WorkView } | null>(null);
-  // 更新任务：进度轮询与横幅
+  let viewFilter = $state<ViewFilter>({ kind: "all" });
+  let importYears = $state("1");
+
+  let showPersonalization = $state(false);
+  let cardMenu = $state<{ x: number; y: number; work: WorkView } | null>(null);
+  let displayMenu = $state<{ x: number; y: number } | null>(null);
+  let updateMenu = $state<{ x: number; y: number } | null>(null);
+
   let progress = $state<UpdateState | null>(null);
   let importInfo = $state<ImportProgress | null>(null);
-  let bannerDismissed = $state(false);
-  let updateMenu = $state<{ x: number; y: number } | null>(null);
+  let genreInfo = $state<GenreProgress | null>(null);
+  let coverage = $state<ImportCoverage | null>(null);
   let lastProgressTs = 0;
+  let lastGenreDoneTs = 0;
+  let lastImportPhase = "";
 
   let scroller: HTMLDivElement | null = $state(null);
   let viewportW = $state(1200);
@@ -79,122 +157,207 @@
   let hoverX = $state(0);
   let hoverY = $state(0);
   let hoverTimer: ReturnType<typeof setTimeout> | null = null;
-  // 底部信息栏视图当前展示的作品（悬停更新；未悬停时展示第一件）
-  let barWork = $state<WorkView | null>(null);
+
+  // 对话框：收藏夹 / 分类导入 / 加入每日刷新 / 年份选择
+  let collectionPrompt = $state<{ workId: string } | null>(null);
+  let collectionName = $state("");
+  let genreImportRequest = $state<{ id: string; name: string } | null>(null);
+  let joinDailyRequest = $state<{ id: string; name: string } | null>(null);
+  let yearDialog = $state<{ mode: "update" | "deeper" } | null>(null);
+  let yearValue = $state(new Date().getFullYear() - 5);
+  let deeperValue = $state(7);
 
   const works = $derived(data?.works ?? []);
-  const favoriteIds = $derived(library.idsIn(filter.collectionId));
-  const followedKeys = $derived(library.followedKeys());
-  const filtered = $derived(applyFilters(works, filter, sort, { favoriteIds, followedKeys }));
-  const barTarget = $derived(barWork ?? filtered[0] ?? null);
-  // 横幅可见性：运行中始终显示；完成后 15 分钟内可手动关闭
-  const bannerVisible = $derived(
-    !!progress &&
-      !bannerDismissed &&
-      (isRunning(progress) ||
-        (progress.updated_ts ?? 0) > Math.floor(Date.now() / 1000) - 900),
+  const activeCollectionId = $derived(viewFilter.kind === "collection" ? viewFilter.id : "");
+  const activeMaker = $derived(viewFilter.kind === "maker" ? viewFilter : null);
+  const collectionNameOf = $derived(
+    activeCollectionId
+      ? (library.data.collections.find((item) => item.id === activeCollectionId)?.name ?? "已删除")
+      : "",
   );
-  const years = $derived.by(() => {
-    const set = new Set<number>();
-    for (const work of works) {
-      const year = yearOf(work);
-      if (year !== null) set.add(year);
-    }
-    return [...set].sort((a, b) => b - a);
+  const favoriteIds = $derived.by(() => {
+    if (activeCollectionId) return library.idsIn(activeCollectionId);
+    return new Set<string>();
   });
+  const filtered = $derived(applyFilters(works, filter, sort, { viewFilter, favoriteIds }));
   const genres = $derived(data?.file.genres ?? []);
-  const activeCount = $derived(activeFilterCount(filter));
+  const genreCatalog = $derived(data?.file.genre_catalog ?? []);
+  const activeGenre = $derived(genres.find((entry) => entry.id === filter.genreFocus) ?? null);
+  const generatedAt = $derived(
+    data ? new Date(data.file.generated_at).toLocaleString("zh-CN", { hour12: false }) : "",
+  );
 
   const cfg = $derived(VIEWS[view]);
-  const cols = $derived(
-    cfg.kind === "grid"
-      ? Math.max(1, Math.floor((viewportW + cfg.gap) / (cfg.itemW + cfg.gap)))
-      : 1,
+  const usable = $derived(Math.max(0, viewportW - 44));
+  const cols = $derived.by(() => {
+    if (cfg.kind === "list") return 1;
+    const count = Math.max(1, Math.floor((usable + cfg.gap) / (cfg.minW + cfg.gap)));
+    return cfg.maxCols ? Math.min(cfg.maxCols, count) : count;
+  });
+  const cellW = $derived(
+    cfg.kind === "list"
+      ? 0
+      : Math.min(cfg.maxW ?? Number.POSITIVE_INFINITY, (usable - (cols - 1) * cfg.gap) / cols),
   );
   const rowH = $derived(cfg.itemH + cfg.gap);
   const totalRows = $derived(Math.ceil(filtered.length / cols));
   const totalHeight = $derived(totalRows * rowH);
   const firstRow = $derived(Math.max(0, Math.floor(scrollTop / rowH) - 1));
-  const lastRow = $derived(
-    Math.min(totalRows, Math.ceil((scrollTop + viewportH) / rowH) + 1),
-  );
-  // 虚拟滚动：只渲染可视行（前后各多渲染一行）
+  const lastRow = $derived(Math.min(totalRows, Math.ceil((scrollTop + viewportH) / rowH) + 1));
   const rows = $derived.by(() => {
     const out: { key: number; top: number; items: WorkView[] }[] = [];
     for (let r = firstRow; r < lastRow; r++) {
-      out.push({
-        key: r,
-        top: r * rowH,
-        items: filtered.slice(r * cols, (r + 1) * cols),
-      });
+      out.push({ key: r, top: r * rowH, items: filtered.slice(r * cols, (r + 1) * cols) });
     }
     return out;
   });
-  const generatedAt = $derived(
-    data
-      ? new Date(data.file.generated_at).toLocaleString("zh-CN", { hour12: false })
-      : "",
-  );
-  // 右键菜单项（收藏 / 收藏夹 / 关注作者 / 打开链接）
+
+  // 顶部横幅（对齐 macOS library.banner 的优先级：进行中优先于已结束）
+  const banner = $derived.by((): { icon: string; text: string } | null => {
+    if (genreInfo?.running) {
+      const text = genreSummary(genreInfo);
+      if (text) return { icon: ICONS.refresh, text };
+    }
+    if (importInfo?.running) {
+      const text = importSummary(importInfo);
+      if (text) return { icon: ICONS.refresh, text };
+    }
+    if (progress && isRunning(progress)) {
+      const text = updateSummary(progress, importInfo);
+      if (text) return { icon: ICONS.refresh, text };
+    }
+    if (genreInfo && !isStale(genreInfo.updated_ts, 6)) {
+      const text = genreSummary(genreInfo);
+      if (text) return { icon: phaseIcon(genreInfo.phase), text };
+    }
+    if (progress && !isStale(progress.updated_ts, 48)) {
+      const text = updateSummary(progress, importInfo);
+      if (text) return { icon: phaseIcon(progress.phase), text };
+    }
+    if (importInfo) {
+      const text = importSummary(importInfo);
+      if (text) return { icon: ICONS.hourglass, text };
+    }
+    return null;
+  });
+
+  function phaseIcon(phase: string | undefined): string {
+    switch (phase) {
+      case "done":
+        return ICONS.check;
+      case "failed":
+        return ICONS.warn;
+      case "busy":
+        return ICONS.hourglass;
+      default:
+        return ICONS.refresh;
+    }
+  }
+
+  const statusText = $derived.by(() => {
+    switch (status) {
+      case "loading":
+        return "正在解析数据…";
+      case "ready":
+        return `已载入 ${works.length.toLocaleString("ja-JP")} 部作品 · 更新于 ${generatedAt}`;
+      case "error":
+        return "无法加载数据";
+      default:
+        return "请选择数据文件开始使用";
+    }
+  });
+
+  // 作品右键菜单（对齐 macOS GameContextMenu：打开作品页 / 收藏夹 / 关注制作者）
   const menuItems = $derived.by(() => {
-    const target = menu?.work;
+    const target = cardMenu?.work;
     const items: { label: string; action: () => void; danger?: boolean }[] = [];
     if (!target) return items;
     const key = makerKeyOf(target.maker, target.maker_id);
-    const favorited = library.isFavorited(target.id);
+    items.push({ label: "打开作品页", action: () => openWork(target.url) });
     items.push({
-      label: favorited ? "取消收藏（我的收藏）" : `收藏到「${DEFAULT_COLLECTION_NAME}」`,
+      label: library.isFavorited(target.id) ? "移出我的收藏" : `加入「${DEFAULT_COLLECTION_NAME}」`,
       action: () => library.toggleFavorite(target.id),
     });
     for (const collection of library.data.collections) {
       if (collection.name === DEFAULT_COLLECTION_NAME) continue;
       const inside = collection.work_ids.includes(target.id);
       items.push({
-        label: inside ? `从「${collection.name}」移除` : `加入「${collection.name}」`,
+        label: `${inside ? "✓ " : "　"}${collection.name}`,
         action: () => library.toggleIn(target.id, collection.id),
       });
     }
     items.push({
       label: "新建收藏夹并加入…",
       action: () => {
-        const name = window.prompt("新建收藏夹名称：", "新收藏夹");
-        if (name !== null) library.createCollection(name, target.id);
+        collectionName = "";
+        collectionPrompt = { workId: target.id };
       },
     });
     items.push({
       label: library.isFollowing(key)
-        ? `取消关注「${target.maker}」`
-        : `关注作者「${target.maker}」`,
+        ? `取消关注「${target.maker || "制作者未知"}」`
+        : `关注制作者「${target.maker || "制作者未知"}」`,
       action: () => library.toggleFollow(key, target.maker, target.maker_id ?? ""),
     });
-    items.push({ label: "打开 DLsite 页面", action: () => openWork(target.url) });
     return items;
   });
-  // 「更新数据」菜单项
+
+  const displayMenuItems = $derived(
+    VIEW_ORDER.map((mode) => ({
+      label: `${view === mode ? "✓ " : "　"}${VIEWS[mode].label}（⌘${VIEWS[mode].shortcut}）`,
+      action: () => setView(mode),
+    })),
+  );
+
   const updateMenuItems = $derived.by(() => {
-    const items: { label: string; action: () => void }[] = [];
-    items.push({ label: "立即更新热榜（快，约 1–2 分钟）", action: () => void runUpdate("quick") });
+    const items: { label: string; action: () => void; disabled?: boolean; divider?: boolean }[] = [];
+    items.push({ label: "立即更新热榜（快）", action: () => void runUpdate("quick") });
     items.push({ label: "完整维护（同每日计划）", action: () => void runUpdate("daily") });
+    items.push({ label: "最近一年", divider: true, action: () => void runUpdate("update-all", "1") });
+    items.push({ label: "最近三年", action: () => void runUpdate("update-all", "3") });
+    items.push({ label: "最近五年", action: () => void runUpdate("update-all", "5") });
+    items.push({ label: "最近七年", action: () => void runUpdate("update-all", "7") });
     items.push({
-      label: "继续抓更早…（续深导入）",
+      label: "自定义年份至今…",
+      divider: true,
       action: () => {
-        const value = window.prompt("续深目标年数（2–30）：", "7");
-        if (value !== null && /^\d+$/.test(value.trim())) {
-          void runUpdate("update-all", `deeper:${value.trim()}`);
-        }
+        yearValue = new Date().getFullYear() - 5;
+        yearDialog = { mode: "update" };
       },
     });
     items.push({
-      label: "导入最近 N 年…",
+      label: "继续抓更早…",
+      disabled: coverage === null,
       action: () => {
-        const value = window.prompt("导入最近几年（1–30）：", "1");
-        if (value !== null && /^\d+$/.test(value.trim())) {
-          void runUpdate("update-all", value.trim());
-        }
+        if (!coverage) return;
+        const covered = coverage.covered_years ?? 3;
+        deeperValue = Math.min(Math.max(Math.floor(covered) + 1, 2), 29);
+        yearDialog = { mode: "deeper" };
       },
     });
     return items;
   });
+
+  const deeperOptions = $derived.by(() => {
+    const covered = coverage?.covered_years ?? 3;
+    const base = Math.min(Math.max(Math.floor(covered) + 1, 2), 29);
+    const out: { value: number; label: string }[] = [];
+    for (let years = base; years <= Math.min(base + 8, 30); years++) {
+      out.push({ value: years, label: `最近 ${years} 年` });
+    }
+    return out;
+  });
+
+  const yearPickChoices = $derived.by(() => {
+    const current = new Date().getFullYear();
+    const out: { value: number; label: string }[] = [];
+    for (let year = current; year >= 2006; year--) {
+      out.push({ value: year, label: `${year} 年` });
+    }
+    return out;
+  });
+
+  const genreJobActive = $derived(genreInfo?.running === true);
 
   $effect(() => {
     const el = scroller;
@@ -209,23 +372,27 @@
     return () => observer.disconnect();
   });
 
-  // 筛选 / 排序 / 视图变化时：回到顶部并收起悬停卡
+  // 筛选 / 排序 / 视图 / 视图范围变化时：回到顶部并收起浮窗与菜单
   $effect(() => {
     void filter.keyword;
+    void filter.ratingLow;
+    void filter.ratingHigh;
+    void filter.includeUnrated;
+    void filter.salesLow;
+    void filter.salesHigh;
+    void filter.priceLow;
+    void filter.priceHigh;
     void filter.genres;
-    void filter.yearFrom;
-    void filter.yearTo;
-    void filter.salesMin;
-    void filter.priceMax;
-    void filter.ratingMin;
-    void filter.fav;
-    void filter.collectionId;
-    void filter.followed;
+    void filter.excludeGenres;
+    void filter.form;
+    void filter.selectedYears;
+    void filter.flags;
+    void filter.genreFocus;
     void sort;
     void view;
+    void viewFilter;
     hideHover();
-    barWork = null;
-    menu = null;
+    cardMenu = null;
     scroller?.scrollTo({ top: 0 });
     scrollTop = 0;
   });
@@ -254,7 +421,7 @@
     status = "loading";
     errorMessage = "";
     try {
-      // 先让“加载中”渲染一帧，再做读文件与解析的重活
+      // 先让「加载中」渲染一帧，再做读文件与解析的重活
       await new Promise((resolve) => setTimeout(resolve, 0));
       data = await loadWorks();
       console.info(`[radar] 已加载 ${data.works.length} 件作品（${data.path}）`);
@@ -280,7 +447,7 @@
   function onScroll(event: Event) {
     scrollTop = (event.currentTarget as HTMLDivElement).scrollTop;
     hideHover();
-    menu = null;
+    cardMenu = null;
   }
 
   function openWork(url: string) {
@@ -291,59 +458,29 @@
     event.preventDefault();
     event.stopPropagation();
     hideHover();
-    menu = { x: event.clientX, y: event.clientY, work };
+    cardMenu = { x: event.clientX, y: event.clientY, work };
   }
 
-  async function pollProgress() {
-    try {
-      const { state, importProgress } = await readProgress();
-      if (state && (state.updated_ts ?? 0) !== lastProgressTs) {
-        const previous = progress?.phase;
-        lastProgressTs = state.updated_ts ?? 0;
-        bannerDismissed = false;
-        if (state.phase === "done" && previous && ACTIVE_PHASES.has(previous)) {
-          void reload(); // 更新完成 → 自动刷新数据
-        }
-      }
-      progress = state;
-      importInfo = importProgress;
-    } catch {
-      // 轮询失败不打扰（文件可能暂不可读；下次再试）
-    }
-  }
-
-  async function runUpdate(kind: "quick" | "daily" | "update-all", range?: string) {
-    if (isRunning(progress)) {
-      window.alert("已有更新在运行中，进度见顶部横幅。");
-      return;
-    }
-    try {
-      await startUpdate(kind, range);
-      bannerDismissed = false;
-      await pollProgress();
-    } catch (error) {
-      window.alert(String(error));
-    }
+  function openDisplayMenu(event: MouseEvent) {
+    const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
+    displayMenu = { x: rect.left, y: rect.bottom + 6 };
   }
 
   function openUpdateMenu(event: MouseEvent) {
     const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
-    updateMenu = { x: rect.left, y: rect.bottom + 6 };
+    updateMenu = { x: Math.max(8, rect.right - 250), y: rect.bottom + 6 };
   }
 
+  // P21：悬停 0.5 秒显示浮窗
   function enterHover(work: WorkView, event: MouseEvent) {
     cancelHoverTimer();
-    if (view === "info") {
-      barWork = work;
-      return;
-    }
     const x = event.clientX;
     const y = event.clientY;
     hoverTimer = setTimeout(() => {
       hoverX = x;
       hoverY = y;
       hoverWork = work;
-    }, 320);
+    }, 500);
   }
 
   function leaveHover() {
@@ -363,24 +500,206 @@
     hoverWork = null;
   }
 
-  function resetFilter() {
+  async function pollProgress() {
+    try {
+      const next = await readProgress();
+      const state = next.state;
+      if (state && (state.updated_ts ?? 0) !== lastProgressTs) {
+        const previous = progress?.phase;
+        lastProgressTs = state.updated_ts ?? 0;
+        if (state.phase === "done" && previous && ACTIVE_PHASES.has(previous)) {
+          void reload(); // 更新完成 → 自动刷新数据
+        }
+      }
+      progress = state;
+      const imported = next.importProgress;
+      if (imported) {
+        const phase = imported.phase ?? "";
+        if (phase === "done" && lastImportPhase === "enrich") {
+          void reload(); // 渐进导入完成 → 自动刷新
+        }
+        lastImportPhase = phase;
+      }
+      importInfo = imported;
+      const genre = next.genreProgress;
+      if (genre && genre.done && !isStale(genre.updated_ts, 6) && (genre.updated_ts ?? 0) !== lastGenreDoneTs) {
+        if (lastGenreDoneTs !== 0 || genreInfo !== null) {
+          void reload(); // 分类抓取完成 → 自动刷新
+          const id = genre.genre_id ?? "";
+          const name = genre.genre_name ?? genreNameById(id);
+          if (id) joinDailyRequest = { id, name };
+        }
+        lastGenreDoneTs = genre.updated_ts ?? 0;
+      } else if (genre?.done) {
+        lastGenreDoneTs = genre.updated_ts ?? lastGenreDoneTs;
+      }
+      genreInfo = genre;
+      coverage = next.importCoverage;
+    } catch {
+      // 轮询失败不打扰（文件可能暂不可读；下次再试）
+    }
+  }
+
+  function genreNameById(id: string): string {
+    return genres.find((entry) => entry.id === id)?.name ?? id;
+  }
+
+  async function runUpdate(kind: "quick" | "daily" | "update-all", range?: string) {
+    if (isRunning(progress) || genreJobActive) {
+      window.alert("已有更新在运行中，进度见顶部横幅。");
+      return;
+    }
+    try {
+      await startUpdate(kind, range);
+      await pollProgress();
+    } catch (error) {
+      window.alert(String(error));
+    }
+  }
+
+  function setView(mode: ViewMode) {
+    view = mode;
+    prefs.set("displayMode", mode);
+  }
+
+  function onKeydown(event: KeyboardEvent) {
+    if (event.metaKey || event.ctrlKey) {
+      const index = Number(event.key);
+      if (Number.isInteger(index) && index >= 1 && index <= VIEW_ORDER.length) {
+        event.preventDefault();
+        setView(VIEW_ORDER[index - 1]);
+        return;
+      }
+    }
+    if (event.key === "Escape") {
+      hideHover();
+      cardMenu = null;
+      displayMenu = null;
+      updateMenu = null;
+      showPersonalization = false;
+    }
+  }
+
+  /** 侧栏开关（对齐 macOS P16.1）：窗口向外扩展 / 缩回——关闭时右缘与内容不动。 */
+  async function toggleSidebar() {
+    const next = !prefs.data.sidebarVisible;
+    prefs.set("sidebarVisible", next);
+    try {
+      const window_ = getCurrentWindow();
+      const size = await window_.outerSize();
+      const position = await window_.outerPosition();
+      const scale = await window_.scaleFactor();
+      const delta = 280 * scale;
+      if (!next) {
+        const targetWidth = Math.max(600 * scale, size.width - delta);
+        const right = position.x + size.width;
+        await window_.setSize(
+          new LogicalSize(Math.round(targetWidth / scale), Math.round(size.height / scale)),
+        );
+        await window_.setPosition(
+          new LogicalPosition(Math.round((right - targetWidth) / scale), Math.round(position.y / scale)),
+        );
+      } else {
+        const monitor = await currentWindowMonitor();
+        const screenMinX = monitor?.workArea.position.x ?? 0;
+        const leftRoom = Math.max(0, position.x - screenMinX);
+        const leftPart = Math.min(delta, leftRoom);
+        await window_.setPosition(
+          new LogicalPosition(
+            Math.round((position.x - leftPart) / scale),
+            Math.round(position.y / scale),
+          ),
+        );
+        await window_.setSize(
+          new LogicalSize(Math.round((size.width + delta) / scale), Math.round(size.height / scale)),
+        );
+      }
+    } catch (error) {
+      console.error("[radar] 侧栏窗口联动失败：", error);
+    }
+  }
+
+  // ChipFilter（对齐 macOS）：分类/形式/标志芯片点击 → 筛选或取消
+  function chipCategory(name: string) {
+    if (filter.genres.includes(name)) {
+      filter.genres = filter.genres.filter((item) => item !== name);
+    } else {
+      filter.genres = [...filter.genres, name];
+      filter.excludeGenres = filter.excludeGenres.filter((item) => item !== name);
+    }
+  }
+
+  function chipForm(name: string) {
+    filter.form = filter.form === name ? "" : name;
+  }
+
+  function chipBadge(key: "voice" | "music" | "video") {
+    filter.flags = { ...filter.flags, [key]: !filter.flags[key] };
+  }
+
+  // RankDisplay（对齐 macOS）：分类人气态显示该分类名次；官方人气排序显示全站名次
+  function rankTextFor(work: WorkView): string | null {
+    if (filter.genreFocus) {
+      const position = work.genre_pos?.[filter.genreFocus];
+      return typeof position === "number" ? `#${position}` : null;
+    }
+    if (sort === "trend" && typeof work.rank_trend_current === "number") {
+      return `#${work.rank_trend_current}`;
+    }
+    return null;
+  }
+
+  function showMaker(work: WorkView) {
+    viewFilter = {
+      kind: "maker",
+      key: makerKeyOf(work.maker, work.maker_id),
+      name: work.maker || "制作者未知",
+      makerId: work.maker_id ?? "",
+    };
+  }
+
+  async function handleImportToggle(on: boolean) {
+    try {
+      await importSwitch(on, importYears);
+      await pollProgress();
+    } catch (error) {
+      window.alert(String(error));
+    }
+  }
+
+  async function handleGenreImport(id: string, name: string) {
+    genreImportRequest = { id, name };
+  }
+
+  async function confirmGenreImport(id: string) {
+    genreImportRequest = null;
+    try {
+      await startGenreImport(id, false);
+      await pollProgress();
+    } catch (error) {
+      window.alert(String(error));
+    }
+  }
+
+  async function handleGenreMore() {
+    if (!filter.genreFocus || genreJobActive) return;
+    try {
+      await startGenreImport(filter.genreFocus, true);
+      await pollProgress();
+    } catch (error) {
+      window.alert(String(error));
+    }
+  }
+
+  function clearAllFilters() {
     filter = emptyFilter();
   }
 
-  function fmtNum(n: number | null | undefined): string {
-    return typeof n === "number" && Number.isFinite(n) ? n.toLocaleString("ja-JP") : "—";
-  }
-
-  function fmtRating(n: number | null | undefined): string {
-    return typeof n === "number" && Number.isFinite(n) ? n.toFixed(1) : "—";
-  }
-
-  function fmtPrice(w: WorkView): string {
-    return typeof w.price === "number" ? `¥${w.price.toLocaleString("ja-JP")}` : "—";
-  }
-
-  function fmtDate(w: WorkView): string {
-    return w.regist_date ? w.regist_date.slice(0, 10) : "—";
+  function submitCollection(value: string) {
+    if (collectionPrompt) {
+      library.createCollection(value, collectionPrompt.workId);
+      collectionPrompt = null;
+    }
   }
 </script>
 
@@ -388,249 +707,297 @@
   <title>同人游戏雷达 · Doujin Game Radar</title>
 </svelte:head>
 
-<div class="app">
-  <header class="toolbar">
-    <div class="brand">同人游戏雷达<span class="tag">桌面版</span></div>
-    <div class="actions">
-      <button class="btn" onclick={pick}>打开数据文件…</button>
-      <button class="btn" onclick={() => reload()} disabled={status === "loading" || status === "empty"}>
-        重新加载
-      </button>
-      <button class="btn" onclick={openUpdateMenu}>更新数据 ▾</button>
-    </div>
-    {#if status === "ready" && data}
-      <div class="actions views">
-        {#each VIEW_ORDER as v (v)}
-          <button class="btn view-btn" class:active={view === v} onclick={() => (view = v)}>
-            {VIEWS[v].label}
-          </button>
-        {/each}
-      </div>
-      <select class="select" bind:value={sort}>
-        {#each SORT_OPTIONS as option (option.key)}
-          <option value={option.key}>{option.label}</option>
-        {/each}
-      </select>
-      <button class="btn" class:active={showFilters} onclick={() => (showFilters = !showFilters)}>
-        筛选{activeCount > 0 ? `（${activeCount}）` : ""}
-      </button>
-    {/if}
-    <div class="meta">
-      {#if status === "ready" && data}
-        {filtered.length.toLocaleString("ja-JP")} / {works.length.toLocaleString("ja-JP")} 件 · 导出 {generatedAt}
-      {:else if status === "loading"}
-        正在加载…
-      {/if}
-    </div>
-  </header>
+<svelte:window onkeydown={onKeydown} />
 
-  {#if bannerVisible && progress}
-    <UpdateBanner
-      state={progress}
+<div class="app">
+  {#if prefs.data.sidebarVisible}
+    <Sidebar
+      bind:filter
+      bind:viewFilter
+      bind:importYears
+      {works}
+      {genres}
+      {genreCatalog}
+      collections={library.data.collections}
+      makers={library.data.makers}
       importProgress={importInfo}
-      ondismiss={() => (bannerDismissed = true)}
+      genreProgress={genreInfo}
+      onCreateCollection={(name) => library.createCollection(name)}
+      onRenameCollection={(id, name) => library.renameCollection(id, name)}
+      onDeleteCollection={(id) => {
+        if (viewFilter.kind === "collection" && viewFilter.id === id) viewFilter = { kind: "all" };
+        library.deleteCollection(id);
+      }}
+      onGenreImport={(id, name) => void handleGenreImport(id, name)}
+      onClearFilters={clearAllFilters}
+      onImportToggle={(on) => void handleImportToggle(on)}
+      onCancelImport={() => void cancelImport().then(() => pollProgress())}
+      onCancelFollow={(maker) => library.toggleFollow(maker.key, maker.name, maker.maker_id)}
     />
   {/if}
 
-  {#if status === "ready" && data}
-    {#if showFilters}
-      <FilterPanel bind:filter {genres} {years} onreset={resetFilter} />
+  <div class="main">
+    <header class="header">
+      <div class="brand">
+        <div class="brand-title">同人游戏雷达</div>
+        <div class="brand-sub">{statusText}</div>
+      </div>
+      <div class="actions">
+        <button
+          class="icon-btn"
+          title={prefs.data.sidebarVisible ? "收起筛选侧栏（窗口同步缩回）" : "展开筛选侧栏（窗口同步扩展）"}
+          onclick={() => void toggleSidebar()}
+        >
+          {@html ICONS.sidebar}
+        </button>
+        <button class="btn with-icon" title="显示形式（⌘1–⌘5，记住选择）" onclick={openDisplayMenu}>
+          {@html VIEWS[view].icon}
+          {VIEWS[view].label}
+        </button>
+        <button
+          class="btn with-icon"
+          class:active={showPersonalization}
+          onclick={() => (showPersonalization = !showPersonalization)}
+        >
+          {@html ICONS.slider}个性化
+        </button>
+        <button class="btn" onclick={pick}>选择数据文件</button>
+        <button class="btn with-icon" onclick={openUpdateMenu}>
+          {@html ICONS.tray}开始更新数据 ▾
+        </button>
+        <button
+          class="btn primary with-icon"
+          onclick={() => void (status === "ready" && data ? reload() : pick())}
+          disabled={status === "loading"}
+        >
+          {@html ICONS.refresh}更新
+        </button>
+      </div>
+    </header>
+
+    {#if showPersonalization}
+      <div class="popover">
+        <div class="pop-title">个性化显示</div>
+        <div class="pop-divider"></div>
+        <label class="pop-check">
+          <input
+            type="checkbox"
+            checked={prefs.data.showBadges}
+            onchange={(event) => prefs.set("showBadges", event.currentTarget.checked)}
+          />
+          徽章（配音 / 音乐 / 动画）
+        </label>
+        <label class="pop-check">
+          <input
+            type="checkbox"
+            checked={prefs.data.showDiscount}
+            onchange={(event) => prefs.set("showDiscount", event.currentTarget.checked)}
+          />
+          折扣角标与原价划线
+        </label>
+        <label class="pop-check">
+          <input
+            type="checkbox"
+            checked={prefs.data.showRatingCount}
+            onchange={(event) => prefs.set("showRatingCount", event.currentTarget.checked)}
+          />
+          评价人数
+        </label>
+        <div class="pop-note">偏好保存在本机，立即生效。</div>
+      </div>
     {/if}
-    <div class="scroller" bind:this={scroller} onscroll={onScroll}>
-      <div class="canvas" style="height: {totalHeight}px">
-        {#each rows as row (row.key)}
-          <div class="grid-row {cfg.kind}" style="top: {row.top}px">
-            {#each row.items as w (w.id)}
-              {#if view === "grid" || view === "wall" || view === "info"}
-                <button
-                  class="card {view}"
-                  onclick={() => openWork(w.url)}
+
+    {#if banner}
+      <div class="banner-wrap">
+        <UpdateBanner icon={banner.icon} text={banner.text} />
+      </div>
+    {/if}
+
+    {#if viewFilter.kind !== "all"}
+      <div class="strip">
+        <span class="strip-icon">{@html ICONS.filterCircle}</span>
+        <span class="strip-title">{viewFilterTitle(viewFilter, collectionNameOf)}</span>
+        <span class="strip-count">· 命中 {filtered.length} 部</span>
+        <span class="spacer"></span>
+        {#if activeMaker}
+          {#if activeMaker.makerId}
+            <button
+              class="link with-icon"
+              title="打开该作者主页（网页端，包含未在本机入库的作品）"
+              onclick={() =>
+                openWork(
+                  `https://www.dlsite.com/maniax/circle/profile/=/maker_id/${activeMaker.makerId}.html`,
+                )}
+            >
+              {@html ICONS.external}在 DLsite 查看全量作品
+            </button>
+          {/if}
+          <button
+            class="link"
+            onclick={() => library.toggleFollow(activeMaker.key, activeMaker.name, activeMaker.makerId)}
+          >
+            {library.isFollowing(activeMaker.key) ? "取消关注" : "关注此作者"}
+          </button>
+        {/if}
+        <button class="link" onclick={() => (viewFilter = { kind: "all" })}>返回全部作品</button>
+      </div>
+    {/if}
+
+    {#if activeGenre}
+      <div class="strip">
+        <span class="strip-icon">{@html ICONS.chartBarFill}</span>
+        <span class="strip-title">分类人气：「{activeGenre.name}」按官方人气名次</span>
+        <span class="spacer"></span>
+        <button class="link" onclick={() => (filter.genreFocus = "")}>返回全部作品</button>
+      </div>
+    {/if}
+
+    {#if status === "ready" && data}
+      <div class="count-row">
+        <span class="count-text">找到 {filtered.length} 部作品</span>
+        <span class="spacer"></span>
+        <select class="sort-select" bind:value={sort} aria-label="排序">
+          {#each SORT_OPTIONS as option (option.key)}
+            <option value={option.key}>{option.label}</option>
+          {/each}
+        </select>
+      </div>
+      <div class="scroller" bind:this={scroller} onscroll={onScroll}>
+        <div class="canvas" style="height: {totalHeight + 22}px">
+          {#each rows as row (row.key)}
+            <div class="grid-row" style="top: {row.top}px; gap: {cfg.gap}px">
+              {#each row.items as w (w.id)}
+                <div
+                  class="cell"
+                  role="listitem"
+                  style="height: {cfg.itemH}px; {cfg.kind === 'list' ? 'flex:1;' : `width:${cellW}px;`}"
+                  ondblclick={() => openWork(w.url)}
                   oncontextmenu={(event) => openMenu(w, event)}
                   onmouseenter={(event) => enterHover(w, event)}
                   onmouseleave={leaveHover}
                 >
-                  <span
-                    class="fav-btn"
-                    class:on={library.isFavorited(w.id)}
-                    role="button"
-                    tabindex="-1"
-                    title={library.isFavorited(w.id) ? "取消收藏" : "收藏到「我的收藏」"}
-                    onclick={(event) => {
-                      event.preventDefault();
-                      event.stopPropagation();
-                      library.toggleFavorite(w.id);
-                    }}
-                    onkeydown={(event) => {
-                      if (event.key === "Enter" || event.key === " ") {
-                        event.preventDefault();
-                        event.stopPropagation();
-                        library.toggleFavorite(w.id);
-                      }
-                    }}
-                  >
-                    {library.isFavorited(w.id) ? "♥" : "♡"}
-                  </span>
-                  <div class="cover">
-                    {#if w._cover}
-                      <img src={w._cover} alt="" loading="lazy" decoding="async" />
-                    {:else}
-                      <span class="no-cover">无封面</span>
-                    {/if}
-                  </div>
-                  {#if view === "grid"}
-                    <div class="info">
-                      <div class="title">{w.title}</div>
-                      <div class="maker">{w.maker}</div>
-                      <div class="stats">
-                        <span>销量 {fmtNum(w.sales)}</span>
-                        <span>★ {fmtRating(w.rating)}</span>
-                        <span class="price">{fmtPrice(w)}</span>
-                      </div>
-                    </div>
+                  {#if view === "largeCards"}
+                    <LargeRow
+                      game={w}
+                      showBadges={prefs.data.showBadges}
+                      showDiscount={prefs.data.showDiscount}
+                      showRatingCount={prefs.data.showRatingCount}
+                      rankText={rankTextFor(w)}
+                      oncats={chipCategory}
+                      onform={chipForm}
+                      onbadge={chipBadge}
+                      onmaker={() => showMaker(w)}
+                      onopen={() => openWork(w.url)}
+                    />
+                  {:else if view === "compact"}
+                    <CompactRow
+                      game={w}
+                      showBadges={prefs.data.showBadges}
+                      showDiscount={prefs.data.showDiscount}
+                      showRatingCount={prefs.data.showRatingCount}
+                      rankText={rankTextFor(w)}
+                      onbadge={chipBadge}
+                      onmaker={() => showMaker(w)}
+                      onopen={() => openWork(w.url)}
+                    />
+                  {:else if view === "coverWall"}
+                    <CoverTile game={w} showBadges={prefs.data.showBadges} onbadge={chipBadge} />
+                  {:else}
+                    <MediumCard
+                      game={w}
+                      showBadges={prefs.data.showBadges}
+                      showDiscount={prefs.data.showDiscount}
+                      showRatingCount={prefs.data.showRatingCount}
+                      rankText={rankTextFor(w)}
+                      oncats={chipCategory}
+                      onform={chipForm}
+                      onbadge={chipBadge}
+                      onmaker={() => showMaker(w)}
+                      onopen={() => openWork(w.url)}
+                    />
                   {/if}
-                </button>
-              {:else if view === "compact"}
-                <button
-                  class="row-item compact"
-                  onclick={() => openWork(w.url)}
-                  oncontextmenu={(event) => openMenu(w, event)}
-                  onmouseenter={(event) => enterHover(w, event)}
-                  onmouseleave={leaveHover}
-                >
-                  <div class="thumb sm">
-                    {#if w._cover}<img src={w._cover} alt="" loading="lazy" decoding="async" />{/if}
-                  </div>
-                  <div class="row-main">
-                    <div class="row-title">{w.title}</div>
-                    <div class="row-sub">{w.maker} · {w.id}</div>
-                  </div>
-                  <div class="row-num">销量 {fmtNum(w.sales)}</div>
-                  <div class="row-num">★ {fmtRating(w.rating)}</div>
-                  <div class="row-num price">{fmtPrice(w)}</div>
-                  <div class="row-date">{fmtDate(w)}</div>
-                  <span
-                    class="fav-btn inline"
-                    class:on={library.isFavorited(w.id)}
-                    role="button"
-                    tabindex="-1"
-                    title={library.isFavorited(w.id) ? "取消收藏" : "收藏到「我的收藏」"}
-                    onclick={(event) => {
-                      event.preventDefault();
-                      event.stopPropagation();
-                      library.toggleFavorite(w.id);
-                    }}
-                    onkeydown={(event) => {
-                      if (event.key === "Enter" || event.key === " ") {
-                        event.preventDefault();
-                        event.stopPropagation();
-                        library.toggleFavorite(w.id);
-                      }
-                    }}
-                  >
-                    {library.isFavorited(w.id) ? "♥" : "♡"}
-                  </span>
-                </button>
+                </div>
+              {/each}
+            </div>
+          {/each}
+          {#if filtered.length === 0}
+            <div class="empty-state">
+              <span class="empty-icon">{@html ICONS.stackSlash}</span>
+              <span>当前条件没有匹配的作品，请调整筛选区间或收藏夹。</span>
+            </div>
+          {/if}
+        </div>
+        {#if activeGenre}
+          <div class="genre-footer">
+            <div class="gf-divider"></div>
+            <div class="gf-row">
+              {#if typeof activeGenre.count === "number"}
+                <span class="gf-text">
+                  「{activeGenre.name}」已加载名次 {Math.min(activeGenre.depth ?? 0, activeGenre.count)}/{activeGenre.count}
+                </span>
+              {:else}
+                <span class="gf-text">「{activeGenre.name}」已加载名次 {activeGenre.depth ?? 0}</span>
+              {/if}
+              {#if activeGenre.seen_at}
+                <span class="gf-date">数据 {String(activeGenre.seen_at).slice(0, 10)}</span>
+              {/if}
+              <span class="spacer"></span>
+              {#if genreJobActive}
+                <span class="gf-progress"><span class="spin"></span>正在导入…</span>
+              {:else if typeof activeGenre.count === "number" && (activeGenre.depth ?? 0) >= activeGenre.count}
+                <span class="gf-date">已到末尾</span>
               {:else}
                 <button
-                  class="row-item strip"
-                  onclick={() => openWork(w.url)}
-                  oncontextmenu={(event) => openMenu(w, event)}
-                  onmouseenter={(event) => enterHover(w, event)}
-                  onmouseleave={leaveHover}
+                  class="btn small with-icon"
+                  title="现抓下一段人气名次；榜上不在库的作品会顺带入库"
+                  onclick={() => void handleGenreMore()}
                 >
-                  <div class="thumb lg">
-                    {#if w._cover}<img src={w._cover} alt="" loading="lazy" decoding="async" />{/if}
-                  </div>
-                  <div class="row-main">
-                    <div class="row-title">{w.title}</div>
-                    <div class="row-sub">{w.maker} · {w.id}</div>
-                    <div class="row-cats">{w.category}</div>
-                    <div class="row-stats">
-                      <span>销量 {fmtNum(w.sales)}</span>
-                      <span>★ {fmtRating(w.rating)}</span>
-                      <span class="price">{fmtPrice(w)}</span>
-                      <span>{fmtDate(w)}</span>
-                    </div>
-                  </div>
-                  <span
-                    class="fav-btn inline"
-                    class:on={library.isFavorited(w.id)}
-                    role="button"
-                    tabindex="-1"
-                    title={library.isFavorited(w.id) ? "取消收藏" : "收藏到「我的收藏」"}
-                    onclick={(event) => {
-                      event.preventDefault();
-                      event.stopPropagation();
-                      library.toggleFavorite(w.id);
-                    }}
-                    onkeydown={(event) => {
-                      if (event.key === "Enter" || event.key === " ") {
-                        event.preventDefault();
-                        event.stopPropagation();
-                        library.toggleFavorite(w.id);
-                      }
-                    }}
-                  >
-                    {library.isFavorited(w.id) ? "♥" : "♡"}
-                  </span>
+                  {@html ICONS.plus}载入更多（下一 100 名，含新作品入库）
                 </button>
               {/if}
-            {/each}
+            </div>
           </div>
-        {/each}
-        {#if filtered.length === 0}
-          <div class="no-result">没有符合条件的作品（试着放宽筛选条件）</div>
         {/if}
       </div>
-    </div>
-    {#if view === "info" && barTarget}
-      <footer class="bottom-bar">
-        <div class="bar-thumb">
-          {#if barTarget._cover}<img src={barTarget._cover} alt="" decoding="async" />{/if}
-        </div>
-        <div class="bar-main">
-          <div class="bar-title">{barTarget.title}</div>
-          <div class="bar-sub">{barTarget.maker} · {barTarget.id} · 发售 {fmtDate(barTarget)}</div>
-          <div class="bar-stats">
-            <span>销量 {fmtNum(barTarget.sales)}</span>
-            <span>★ {fmtRating(barTarget.rating)}（{fmtNum(barTarget.rating_count)} 评）</span>
-            <span class="price">{fmtPrice(barTarget)}</span>
-          </div>
-          <div class="bar-cats">{barTarget.category}</div>
-        </div>
-        <button class="btn" onclick={() => barTarget && openWork(barTarget.url)}>
-          打开 DLsite ↗
-        </button>
-      </footer>
+    {:else if status === "loading"}
+      <div class="center">
+        <span class="empty-icon">{@html ICONS.stackSlash}</span>
+        <p>正在解析数据…（约 9k 作品）</p>
+      </div>
+    {:else if status === "error"}
+      <div class="center">
+        <h1>无法加载数据</h1>
+        <p class="error">{errorMessage}</p>
+        <button class="btn" onclick={pick}>选择数据文件</button>
+      </div>
+    {:else}
+      <div class="center">
+        <h1>同人游戏雷达 · Doujin Game Radar</h1>
+        <p>选择由数据管道导出的 <code>works.json</code> 开始浏览</p>
+        <p class="hint">
+          通常位于仓库的 <code>out/works.json</code>；封面在其旁边的 <code>covers/</code> 目录，数据全部留在本机
+        </p>
+        <button class="btn primary" onclick={pick}>选择数据文件</button>
+      </div>
     {/if}
-  {:else if status === "loading"}
-    <div class="center">
-      <p>正在解析数据…（约 9k 作品）</p>
-    </div>
-  {:else if status === "error"}
-    <div class="center">
-      <h1>无法加载数据</h1>
-      <p class="error">{errorMessage}</p>
-      <button class="btn" onclick={pick}>打开数据文件…</button>
-    </div>
-  {:else}
-    <div class="center">
-      <h1>同人游戏雷达 · Doujin Game Radar</h1>
-      <p>选择由数据管道导出的 <code>works.json</code> 开始浏览</p>
-      <p class="hint">
-        通常位于仓库的 <code>out/works.json</code>；封面在其旁边的 <code>covers/</code> 目录，数据全部留在本机
-      </p>
-      <button class="btn primary" onclick={pick}>打开数据文件…</button>
-    </div>
-  {/if}
+  </div>
 </div>
 
 {#if hoverWork}
-  <HoverCard work={hoverWork} x={hoverX} y={hoverY} />
+  <HoverPanel game={hoverWork} x={hoverX} y={hoverY} {genres} />
 {/if}
 
-{#if menu}
-  <ContextMenu x={menu.x} y={menu.y} items={menuItems} onclose={() => (menu = null)} />
+{#if cardMenu}
+  <ContextMenu x={cardMenu.x} y={cardMenu.y} items={menuItems} onclose={() => (cardMenu = null)} />
+{/if}
+
+{#if displayMenu}
+  <ContextMenu
+    x={displayMenu.x}
+    y={displayMenu.y}
+    items={displayMenuItems}
+    onclose={() => (displayMenu = null)}
+  />
 {/if}
 
 {#if updateMenu}
@@ -642,50 +1009,260 @@
   />
 {/if}
 
+{#if collectionPrompt}
+  <PromptDialog
+    title="新建收藏夹"
+    label="收藏夹名称"
+    placeholder="收藏夹名称"
+    bind:value={collectionName}
+    onsubmit={(value) => void submitCollection(value)}
+    oncancel={() => (collectionPrompt = null)}
+  />
+{/if}
+
+{#if genreImportRequest}
+  <ConfirmDialog
+    title="导入分类人气"
+    message={`「${genreImportRequest.name}」尚未导入人气数据。现在抓取并入库？（含榜上新作品，约 1–3 分钟；进度见顶部横幅）`}
+    confirmLabel="开始导入（前 200 名）"
+    danger={false}
+    onconfirm={() => void confirmGenreImport(genreImportRequest?.id ?? "")}
+    oncancel={() => (genreImportRequest = null)}
+  />
+{/if}
+
+{#if joinDailyRequest}
+  <ConfirmDialog
+    title="加入每日刷新？"
+    message={`「${joinDailyRequest.name}」已导入。是否加入每日自动刷新列表？（写入配置 genre_rank_ids）`}
+    confirmLabel="加入"
+    cancelLabel="不用"
+    danger={false}
+    onconfirm={() => {
+      const request = joinDailyRequest;
+      joinDailyRequest = null;
+      if (request) void watchGenre(request.id);
+    }}
+    oncancel={() => (joinDailyRequest = null)}
+  />
+{/if}
+
+{#if yearDialog?.mode === "update"}
+  <YearPickerDialog
+    title="自定义更新范围"
+    message={`更新将导入 ${yearValue} 年至今的作品（导入 → 销量 → 封面 → 导出）。`}
+    options={yearPickChoices}
+    bind:value={yearValue}
+    confirmLabel="开始更新"
+    onsubmit={(year) => {
+      yearDialog = null;
+      void runUpdate("update-all", `since:${year}`);
+    }}
+    oncancel={() => (yearDialog = null)}
+  />
+{/if}
+
+{#if yearDialog?.mode === "deeper"}
+  <YearPickerDialog
+    title="继续抓更早"
+    message={coverage
+      ? `已覆盖 ${coverage.covered_years !== undefined ? `≈${coverage.covered_years.toFixed(1)} 年` : "（年限未知）"}（约第 ${coverage.page ?? 0} 页）；新任务将跳过这一段，从覆盖点继续往更早抓。`
+      : "还没有已覆盖记录（完成过一次目录遍历导入后可用）。"}
+    options={deeperOptions}
+    bind:value={deeperValue}
+    confirmLabel="开始更新"
+    confirmDisabled={coverage === null}
+    onsubmit={(years) => {
+      yearDialog = null;
+      void runUpdate("update-all", `deeper:${years}`);
+    }}
+    oncancel={() => (yearDialog = null)}
+  />
+{/if}
+
 <style>
   .app {
     display: flex;
-    flex-direction: column;
     height: 100vh;
   }
 
-  .toolbar {
+  .main {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .header {
     display: flex;
     align-items: center;
+    gap: 10px;
+    padding: 18px 22px 14px;
     flex-wrap: wrap;
-    gap: 10px 12px;
-    padding: 10px 16px;
-    background: var(--panel);
-    border-bottom: 1px solid var(--border);
-    flex: none;
   }
 
   .brand {
-    font-size: 15px;
-    font-weight: 700;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
   }
 
-  .tag {
-    margin-left: 6px;
-    padding: 1px 7px;
-    border: 1px solid var(--border);
-    border-radius: 999px;
-    font-size: 11px;
-    font-weight: 400;
+  .brand-title {
+    font-size: 25px;
+    font-weight: 700;
+    line-height: 30px;
+  }
+
+  .brand-sub {
+    font-size: 12px;
     color: var(--muted);
-    vertical-align: 1px;
   }
 
   .actions {
+    margin-left: auto;
     display: flex;
-    gap: 8px;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
   }
 
-  .meta {
-    margin-left: auto;
+  .icon-btn {
+    appearance: none;
+    border: 1px solid var(--border);
+    background: var(--panel);
+    color: var(--text);
+    border-radius: 8px;
+    padding: 6px 9px;
+    display: inline-flex;
+    align-items: center;
+    cursor: pointer;
+  }
+
+  .icon-btn:hover {
+    border-color: var(--accent);
+  }
+
+  .btn.with-icon,
+  .link.with-icon {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .btn.active {
+    border-color: var(--accent);
+    color: var(--accent);
+    font-weight: 600;
+  }
+
+  .btn.small {
+    padding: 4px 10px;
+    font-size: 12px;
+  }
+
+  .link {
+    appearance: none;
+    border: 0;
+    background: transparent;
+    color: var(--accent);
+    font: inherit;
+    font-size: 12px;
+    padding: 2px 0;
+    cursor: pointer;
+  }
+
+  .popover {
+    position: fixed;
+    top: 62px;
+    right: 22px;
+    z-index: 150;
+    width: 250px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 14px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    box-shadow: 0 10px 30px rgb(0 0 0 / 25%);
+  }
+
+  .pop-title {
+    font-size: 13px;
+    font-weight: 600;
+  }
+
+  .pop-divider {
+    border-top: 1px solid var(--border);
+    margin: 2px 0;
+  }
+
+  .pop-check {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 12.5px;
+    cursor: pointer;
+  }
+
+  .pop-note {
+    font-size: 11px;
+    color: var(--muted);
+  }
+
+  .banner-wrap {
+    border-bottom: 1px solid var(--border);
+  }
+
+  .strip {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 22px;
+    background: color-mix(in srgb, var(--accent) 7%, transparent);
+    border-bottom: 1px solid var(--border);
+  }
+
+  .strip-icon {
+    display: inline-flex;
+    color: var(--muted);
+  }
+
+  .strip-title {
+    font-size: 13px;
+    font-weight: 600;
+  }
+
+  .strip-count {
     font-size: 12px;
     color: var(--muted);
-    white-space: nowrap;
+  }
+
+  .spacer {
+    flex: 1;
+  }
+
+  .count-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 13px 22px;
+  }
+
+  .count-text {
+    font-size: 13.5px;
+    color: var(--muted);
+  }
+
+  .sort-select {
+    width: 205px;
+    border: 1px solid var(--border);
+    background: var(--panel);
+    color: var(--text);
+    border-radius: 8px;
+    padding: 5px 8px;
+    font-size: 12.5px;
+    font-family: inherit;
   }
 
   .scroller {
@@ -700,101 +1277,86 @@
 
   .grid-row {
     position: absolute;
+    left: 22px;
+    right: 22px;
+    display: flex;
+    align-items: stretch;
+  }
+
+  .cell {
+    position: relative;
+    min-width: 0;
+  }
+
+  .empty-state {
+    position: absolute;
+    top: 0;
     left: 0;
     right: 0;
-    display: flex;
-    justify-content: center;
-    gap: 14px;
-  }
-
-  .card {
-    position: relative;
-    width: 172px;
-    height: 314px;
-    padding: 0;
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    background: var(--panel);
-    overflow: hidden;
+    min-height: 370px;
     display: flex;
     flex-direction: column;
-    text-align: left;
-    cursor: pointer;
-    color: inherit;
-    font: inherit;
-    transition:
-      transform 0.12s ease,
-      box-shadow 0.12s ease,
-      border-color 0.12s ease;
-  }
-
-  .card:hover {
-    transform: translateY(-2px);
-    border-color: var(--accent);
-    box-shadow: 0 6px 18px rgb(0 0 0 / 18%);
-  }
-
-  .cover {
-    height: 240px;
-    flex: none;
-    background: var(--coverbg);
-    display: flex;
     align-items: center;
     justify-content: center;
-  }
-
-  .cover img {
-    width: 100%;
-    height: 100%;
-    object-fit: cover;
-    display: block;
-  }
-
-  .no-cover {
+    gap: 14px;
     color: var(--muted);
-    font-size: 12px;
-  }
-
-  .info {
-    flex: 1;
-    min-width: 0;
-    padding: 8px 10px;
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-  }
-
-  .title {
     font-size: 13px;
-    line-height: 17px;
-    height: 34px;
-    overflow: hidden;
-    display: -webkit-box;
-    -webkit-line-clamp: 2;
-    line-clamp: 2;
-    -webkit-box-orient: vertical;
   }
 
-  .maker {
+  .empty-icon {
+    display: inline-flex;
+    color: var(--muted);
+    opacity: 0.7;
+  }
+
+  .genre-footer {
+    padding-bottom: 18px;
+  }
+
+  .gf-divider {
+    border-top: 1px solid var(--border);
+    margin: 0 22px;
+  }
+
+  .gf-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 22px 0;
+  }
+
+  .gf-text {
     font-size: 12px;
     color: var(--muted);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
   }
 
-  .stats {
-    margin-top: auto;
-    display: flex;
-    justify-content: space-between;
+  .gf-date {
+    font-size: 12px;
+    color: var(--muted);
+    opacity: 0.8;
+  }
+
+  .gf-progress {
+    display: inline-flex;
+    align-items: center;
     gap: 6px;
-    font-size: 11px;
+    font-size: 12px;
     color: var(--muted);
   }
 
-  .stats .price {
-    color: var(--accent);
-    font-weight: 600;
+  .spin {
+    width: 12px;
+    height: 12px;
+    border: 2px solid color-mix(in srgb, var(--accent) 30%, transparent);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin 0.9s linear infinite;
+  }
+
+  @keyframes spin {
+    to {
+      transform: rotate(360deg);
+    }
   }
 
   .center {
@@ -833,315 +1395,5 @@
     border-radius: 6px;
     padding: 1px 6px;
     font-size: 12px;
-  }
-
-  /* ===== 视图切换 / 排序 / 筛选按钮 ===== */
-  .btn.active {
-    border-color: var(--accent);
-    color: var(--accent);
-    font-weight: 600;
-  }
-
-  .views {
-    gap: 6px;
-  }
-
-  .view-btn {
-    padding: 6px 10px;
-  }
-
-  .select {
-    border: 1px solid var(--border);
-    background: var(--panel);
-    color: var(--text);
-    border-radius: 8px;
-    padding: 6px 8px;
-    font-size: 13px;
-    font-family: inherit;
-  }
-
-  /* ===== 封面墙 ===== */
-  .card.wall {
-    width: 200px;
-    height: 280px;
-  }
-
-  .card.wall .cover {
-    height: 100%;
-  }
-
-  /* ===== 列表式视图（紧凑列表 / 横条） ===== */
-  .grid-row.list {
-    padding: 0 12px;
-  }
-
-  .row-item {
-    width: 100%;
-    padding: 0;
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    background: var(--panel);
-    overflow: hidden;
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    text-align: left;
-    cursor: pointer;
-    color: inherit;
-    font: inherit;
-    transition:
-      border-color 0.12s ease,
-      box-shadow 0.12s ease;
-  }
-
-  .row-item:hover {
-    border-color: var(--accent);
-    box-shadow: 0 4px 14px rgb(0 0 0 / 15%);
-  }
-
-  .row-item.compact {
-    height: 56px;
-  }
-
-  .row-item.strip {
-    height: 128px;
-    align-items: stretch;
-  }
-
-  .thumb {
-    flex: none;
-    background: var(--coverbg);
-    overflow: hidden;
-  }
-
-  .thumb.sm {
-    width: 40px;
-    height: 54px;
-    border-radius: 6px;
-    margin-left: 8px;
-  }
-
-  .thumb.lg {
-    width: 88px;
-    height: 126px;
-    border-radius: 8px;
-    margin: 1px 0 1px 1px;
-  }
-
-  .thumb img {
-    width: 100%;
-    height: 100%;
-    object-fit: cover;
-    display: block;
-  }
-
-  .row-main {
-    flex: 1;
-    min-width: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-  }
-
-  .row-item.strip .row-main {
-    padding: 8px 0;
-    justify-content: center;
-  }
-
-  .row-title {
-    font-size: 13px;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
-  .row-sub {
-    font-size: 12px;
-    color: var(--muted);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
-  .row-cats {
-    font-size: 11px;
-    color: var(--muted);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
-  .row-stats {
-    display: flex;
-    gap: 14px;
-    font-size: 11px;
-    color: var(--muted);
-  }
-
-  .row-stats .price {
-    color: var(--accent);
-    font-weight: 600;
-  }
-
-  .row-num {
-    flex: none;
-    width: 110px;
-    text-align: right;
-    font-size: 12px;
-    color: var(--muted);
-  }
-
-  .row-num.price {
-    color: var(--accent);
-    font-weight: 600;
-  }
-
-  .row-date {
-    flex: none;
-    width: 88px;
-    text-align: right;
-    font-size: 11px;
-    color: var(--muted);
-    padding-right: 10px;
-  }
-
-  .no-result {
-    position: absolute;
-    top: 40px;
-    left: 0;
-    right: 0;
-    text-align: center;
-    color: var(--muted);
-  }
-
-  /* ===== 底部信息栏视图 ===== */
-  .bottom-bar {
-    flex: none;
-    display: flex;
-    align-items: center;
-    gap: 14px;
-    padding: 10px 16px;
-    background: var(--panel);
-    border-top: 1px solid var(--border);
-  }
-
-  .bar-thumb {
-    flex: none;
-    width: 66px;
-    height: 92px;
-    border-radius: 8px;
-    background: var(--coverbg);
-    overflow: hidden;
-  }
-
-  .bar-thumb img {
-    width: 100%;
-    height: 100%;
-    object-fit: cover;
-    display: block;
-  }
-
-  .bar-main {
-    flex: 1;
-    min-width: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 3px;
-  }
-
-  .bar-title {
-    font-size: 14px;
-    font-weight: 600;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
-  .bar-sub {
-    font-size: 12px;
-    color: var(--muted);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
-  .bar-stats {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 4px 14px;
-    font-size: 12px;
-    color: var(--muted);
-  }
-
-  .bar-stats .price {
-    color: var(--accent);
-    font-weight: 600;
-  }
-
-  .bar-cats {
-    font-size: 11px;
-    color: var(--muted);
-    line-height: 16px;
-    max-height: 32px;
-    overflow: hidden;
-  }
-
-  /* ===== 收藏心形 ===== */
-  .fav-btn {
-    position: absolute;
-    top: 6px;
-    right: 6px;
-    width: 26px;
-    height: 26px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    border-radius: 50%;
-    background: rgb(0 0 0 / 45%);
-    color: #fff;
-    font-size: 14px;
-    line-height: 1;
-    cursor: pointer;
-    opacity: 0;
-    transition:
-      opacity 0.12s ease,
-      background 0.12s ease;
-    z-index: 2;
-  }
-
-  .card:hover .fav-btn {
-    opacity: 1;
-  }
-
-  .fav-btn.on {
-    opacity: 1;
-    color: #ff5d73;
-    background: rgb(0 0 0 / 55%);
-  }
-
-  .fav-btn:hover {
-    background: rgb(0 0 0 / 65%);
-  }
-
-  .fav-btn.inline {
-    position: static;
-    flex: none;
-    width: 28px;
-    height: 28px;
-    margin-right: 10px;
-    background: transparent;
-    color: var(--muted);
-    opacity: 1;
-    border: 1px solid transparent;
-  }
-
-  .fav-btn.inline:hover {
-    border-color: var(--border);
-    background: transparent;
-  }
-
-  .fav-btn.inline.on {
-    color: #ff5d73;
-    background: transparent;
   }
 </style>

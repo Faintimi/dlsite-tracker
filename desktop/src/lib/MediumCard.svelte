@@ -1,0 +1,176 @@
+<script lang="ts">
+  import type { WorkView } from "$lib/api";
+  import { ICONS, categoriesOf, formsOf } from "$lib/ui";
+  import CategoryChips from "./CategoryChips.svelte";
+  import Cover from "./Cover.svelte";
+  import FormChips from "./FormChips.svelte";
+  import GameBadges from "./GameBadges.svelte";
+  import GameMetaFlow from "./GameMetaFlow.svelte";
+  import GamePrice from "./GamePrice.svelte";
+  import HeartButton from "./HeartButton.svelte";
+
+  let {
+    game,
+    showBadges = true,
+    showDiscount = true,
+    showRatingCount = true,
+    rankText = null,
+    oncats,
+    onform,
+    onbadge,
+    onmaker,
+    onopen,
+  }: {
+    game: WorkView;
+    showBadges?: boolean;
+    showDiscount?: boolean;
+    showRatingCount?: boolean;
+    rankText?: string | null;
+    oncats?: (name: string) => void;
+    onform?: (name: string) => void;
+    onbadge?: (key: "voice" | "music" | "video") => void;
+    onmaker?: () => void;
+    onopen: () => void;
+  } = $props();
+
+  const categories = $derived(categoriesOf(game));
+  const forms = $derived(formsOf(game));
+</script>
+
+<article class="medium">
+  <div class="top">
+    <Cover src={game._cover} width={92} height={122} rounded />
+    <div class="info">
+      <div class="title">{game.title}</div>
+      <button
+        class="maker"
+        title="查看该作者的全部库内作品"
+        onclick={(event) => {
+          event.stopPropagation();
+          onmaker?.();
+        }}
+        ondblclick={(event) => event.stopPropagation()}
+      >{game.maker || "制作者未知"}</button>
+      {#if categories.length > 0}
+        <CategoryChips {categories} limit={5} ontap={oncats} />
+      {/if}
+      {#if forms.length > 0}
+        <FormChips {forms} limit={1} ontap={onform} />
+      {/if}
+      {#if showBadges}
+        <GameBadges {game} ontap={onbadge} />
+      {/if}
+    </div>
+  </div>
+  <GameMetaFlow {game} {showRatingCount} {rankText} />
+  <div class="bottom">
+    <GamePrice {game} {showDiscount} size="sm" />
+    <span class="spacer"></span>
+    <HeartButton id={game.id} />
+    <button
+      class="open"
+      title="打开作品页"
+      onclick={(event) => {
+        event.stopPropagation();
+        onopen();
+      }}
+      ondblclick={(event) => event.stopPropagation()}
+    >
+      {@html ICONS.open}
+    </button>
+  </div>
+</article>
+
+<style>
+  .medium {
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+    padding: 11px;
+    border-radius: 12px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    height: 100%;
+    box-sizing: border-box;
+    overflow: hidden;
+  }
+  .maker {
+    appearance: none;
+    border: 0;
+    background: transparent;
+    font: inherit;
+    font-size: 12px;
+    color: var(--muted);
+    padding: 0;
+    cursor: default;
+    text-align: left;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .maker:hover {
+    color: var(--accent);
+  }
+  .top {
+    display: flex;
+    gap: 11px;
+    align-items: flex-start;
+    min-height: 122px;
+  }
+
+  .info {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .title {
+    font-size: 13px;
+    font-weight: 600;
+    line-height: 16px;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+
+  .maker {
+    font-size: 11px;
+    color: var(--muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .bottom {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: auto;
+  }
+
+  .spacer {
+    flex: 1;
+  }
+
+  .open {
+    appearance: none;
+    border: 0;
+    background: transparent;
+    color: var(--muted);
+    padding: 3px;
+    border-radius: 5px;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+  }
+
+  .open:hover {
+    color: var(--text);
+    background: color-mix(in srgb, var(--text) 10%, transparent);
+  }
+</style>

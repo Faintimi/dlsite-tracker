@@ -43,10 +43,15 @@ export interface WorkView extends Work {
 export interface GenreEntry {
   id: string;
   name: string;
-  count: number;
+  count?: number | null;
   seen_at?: string;
   depth?: number;
   watched?: boolean;
+}
+
+export interface GenreCatalogEntry {
+  id: string;
+  name: string;
 }
 
 export interface WorksFile {
@@ -54,7 +59,7 @@ export interface WorksFile {
   generated_at: string;
   count: number;
   genres?: GenreEntry[];
-  genre_catalog?: unknown;
+  genre_catalog?: GenreCatalogEntry[];
   trend?: unknown;
   works: Work[];
 }

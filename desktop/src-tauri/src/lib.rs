@@ -127,11 +127,13 @@ fn out_dir_of(app: &AppHandle) -> Result<PathBuf, String> {
         .ok_or_else(|| "数据文件路径无效".to_string())
 }
 
-/// 两条进度文件的原文（不存在返回 null）：update-progress.json / import-progress.json。
+/// 进度文件原文（不存在返回 null）：update / import / genre 进度 + 已覆盖最深位置。
 #[derive(serde::Serialize)]
 struct ProgressFiles {
     update: Option<String>,
     import_progress: Option<String>,
+    genre: Option<String>,
+    import_coverage: Option<String>,
 }
 
 #[tauri::command]
@@ -140,17 +142,187 @@ fn read_progress_files(app: AppHandle) -> Result<ProgressFiles, String> {
     Ok(ProgressFiles {
         update: fs::read_to_string(out_dir.join("update-progress.json")).ok(),
         import_progress: fs::read_to_string(out_dir.join("import-progress.json")).ok(),
+        genre: fs::read_to_string(out_dir.join("genre-progress.json")).ok(),
+        import_coverage: fs::read_to_string(out_dir.join("import-coverage.json")).ok(),
     })
+}
+
+/// 项目目录（out 的上一级）。
+fn project_dir_of(app: &AppHandle) -> Result<PathBuf, String> {
+    let out_dir = out_dir_of(app)?;
+    out_dir
+        .parent()
+        .map(|path| path.to_path_buf())
+        .ok_or_else(|| "无法确定项目目录（out 的上一级）".to_string())
+}
+
+/// 后台启动一个管道子进程（stdout/stderr 丢弃，线程回收退出码）。
+fn spawn_pipeline(project_dir: &Path, program: &str, args: &[&str]) -> Result<(), String> {
+    let mut command = Command::new(program);
+    command
+        .args(args)
+        .current_dir(project_dir)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    let child = command.spawn().map_err(|e| format!("无法启动任务：{e}"))?;
+    std::thread::spawn(move || {
+        let mut child = child;
+        let _ = child.wait();
+    });
+    Ok(())
+}
+
+/// 渐进导入开关（对应 macOS 版 scripts/import.sh start|pause）。
+/// on=true 时按范围启动/续传；on=false 时优雅暂停（断点保留）。
+#[tauri::command]
+fn import_switch(app: AppHandle, on: bool, years: Option<String>) -> Result<String, String> {
+    let project_dir = project_dir_of(&app)?;
+    let years = years.unwrap_or_else(|| "1".to_string());
+    #[cfg(windows)]
+    {
+        if on {
+            spawn_pipeline(
+                &project_dir,
+                "python",
+                &["-m", "dlsite_tracker", "import-recent", "--years", &years],
+            )?;
+            Ok(format!("已开启渐进导入（{years}）"))
+        } else {
+            spawn_pipeline(
+                &project_dir,
+                "python",
+                &["-m", "dlsite_tracker", "import-recent", "--pause"],
+            )?;
+            Ok("已暂停渐进导入".to_string())
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        let script = project_dir.join("scripts").join("import.sh");
+        if !script.is_file() {
+            return Err(format!("未找到导入脚本：{}", script.display()));
+        }
+        let script = script.to_string_lossy().into_owned();
+        if on {
+            spawn_pipeline(&project_dir, "/bin/bash", &[&script, "start", &years])?;
+            Ok(format!("已开启渐进导入（{years}）"))
+        } else {
+            // pause 会等待信号送达（脚本内 exec 同一进程），因此同步等待
+            let status = Command::new("/bin/bash")
+                .args([&script, "pause"])
+                .current_dir(&project_dir)
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status();
+            match status {
+                Ok(_) => Ok("已暂停渐进导入".to_string()),
+                Err(e) => Err(format!("暂停导入失败：{e}")),
+            }
+        }
+    }
+}
+
+/// 取消渐进导入任务（已入库作品保留）。
+#[tauri::command]
+fn cancel_import(app: AppHandle) -> Result<String, String> {
+    let project_dir = project_dir_of(&app)?;
+    #[cfg(windows)]
+    {
+        spawn_pipeline(
+            &project_dir,
+            "python",
+            &["-m", "dlsite_tracker", "import-recent", "--cancel"],
+        )?;
+        Ok("已取消导入任务".to_string())
+    }
+    #[cfg(not(windows))]
+    {
+        let script = project_dir.join("scripts").join("import.sh");
+        if !script.is_file() {
+            return Err(format!("未找到导入脚本：{}", script.display()));
+        }
+        let status = Command::new("/bin/bash")
+            .arg(script)
+            .arg("cancel")
+            .current_dir(&project_dir)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+        match status {
+            Ok(_) => Ok("已取消导入任务".to_string()),
+            Err(e) => Err(format!("取消导入失败：{e}")),
+        }
+    }
+}
+
+/// 分类人气：现导入（前 N 页）/ 载入更多（--more，续抓一页）。
+#[tauri::command]
+fn start_genre_import(app: AppHandle, genre: String, more: bool) -> Result<String, String> {
+    let project_dir = project_dir_of(&app)?;
+    #[cfg(windows)]
+    {
+        let mut args: Vec<&str> = vec!["-m", "dlsite_tracker", "fetch-genre", &genre];
+        if more {
+            args.push("--more");
+        }
+        spawn_pipeline(&project_dir, "python", &args)?;
+        Ok(format!("已启动分类 {genre} 抓取"))
+    }
+    #[cfg(not(windows))]
+    {
+        let script = project_dir.join("scripts").join("genre-import.sh");
+        if !script.is_file() {
+            return Err(format!("未找到分类抓取脚本：{}", script.display()));
+        }
+        let script = script.to_string_lossy().into_owned();
+        if more {
+            spawn_pipeline(&project_dir, "/bin/bash", &[&script, &genre, "--more"])?;
+        } else {
+            spawn_pipeline(&project_dir, "/bin/bash", &[&script, &genre])?;
+        }
+        Ok(format!("已启动分类 {genre} 抓取"))
+    }
+}
+
+/// 把分类加入每日刷新列表（写入配置 genre_rank_ids）。
+#[tauri::command]
+fn watch_genre(app: AppHandle, genre: String) -> Result<String, String> {
+    let project_dir = project_dir_of(&app)?;
+    #[cfg(windows)]
+    {
+        spawn_pipeline(
+            &project_dir,
+            "python",
+            &["-m", "dlsite_tracker", "watch-genre", &genre],
+        )?;
+        Ok(format!("已加入每日刷新：{genre}"))
+    }
+    #[cfg(not(windows))]
+    {
+        let script = project_dir.join("scripts").join("genre-import.sh");
+        if !script.is_file() {
+            return Err(format!("未找到分类抓取脚本：{}", script.display()));
+        }
+        let status = Command::new("/bin/bash")
+            .arg(script)
+            .arg("watch")
+            .arg(&genre)
+            .current_dir(&project_dir)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+        match status {
+            Ok(_) => Ok(format!("已加入每日刷新：{genre}")),
+            Err(e) => Err(format!("加入每日刷新失败：{e}")),
+        }
+    }
 }
 
 /// 启动管道任务（quick / daily / update-all[range]）。
 /// 进程独立运行，进度与结果通过进度文件 / 日志反馈，应用不做等待。
 #[tauri::command]
 fn start_update(app: AppHandle, kind: String, range: Option<String>) -> Result<String, String> {
-    let out_dir = out_dir_of(&app)?;
-    let project_dir = out_dir
-        .parent()
-        .ok_or_else(|| "无法确定项目目录（out 的上一级）".to_string())?;
+    let project_dir = project_dir_of(&app)?;
 
     #[cfg(windows)]
     {
@@ -229,7 +401,11 @@ pub fn run() {
             load_library,
             save_library,
             read_progress_files,
-            start_update
+            start_update,
+            import_switch,
+            cancel_import,
+            start_genre_import,
+            watch_genre
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
