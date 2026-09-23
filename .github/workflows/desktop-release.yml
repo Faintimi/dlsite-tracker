@@ -1,0 +1,75 @@
+# 桌面版打包（Windows）：产出 NSIS 安装包，供下载与验收测试。
+# 触发：手动触发 / 推送 desktop/** 到 main（仅上传产物）/ 推送 desktop-v* 标签（同时附加到 Release）。
+name: Desktop Build (Windows)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    tags: ["desktop-v*"]
+    paths:
+      - "desktop/**"
+      - ".github/workflows/desktop-release.yml"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: desktop-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/src-tauri -> target
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type check
+        run: npm run check
+
+      - name: Build installer (NSIS)
+        run: npm run tauri build -- --bundles nsis
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: doujin-game-radar-windows-installer
+          path: desktop/src-tauri/target/release/bundle/nsis/*.exe
+          if-no-files-found: error
+
+      - name: Attach installer to release
+        if: startsWith(github.ref, 'refs/tags/desktop-v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: desktop/src-tauri/target/release/bundle/nsis/*.exe
+          name: "Doujin Game Radar ${{ github.ref_name }}"
+          body: |
+            同人游戏雷达 · Doujin Game Radar —— 桌面版（Windows 安装包）。
+
+            - 安装包见下方 Assets（NSIS `.exe`），Windows 10+ 可用（WebView2 由安装器处理）
+            - 「更新数据」功能需要本机安装 Python 3.9+ 并准备好数据管道（见仓库 README）
+            - Windows installer for the local-first DLsite doujin game browser.
+              Python 3.9+ is required for the in-app update feature.
