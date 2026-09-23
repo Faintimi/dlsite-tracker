@@ -1,8 +1,8 @@
 # Doujin Game Radar · 同人游戏雷达
 
-> **A local-first browser & filter for DLsite doujin games on macOS**, backed by a robots-compliant daily data pipeline: sales / hot rankings / genre popularity refreshed every day — with genre-intersection filters, favorites and maker tracking. **All data and cover images stay on your machine.**
+> **A cross-platform desktop browser & filter for DLsite doujin games (Windows / macOS)**, backed by a robots-compliant daily data pipeline: sales / hot rankings / genre popularity refreshed every day — with genre-intersection filters, favorites and maker tracking. **All data and cover images stay on your machine.**
 >
-> *macOS 上的 DLsite 同人游戏浏览与筛选应用：每日自动更新销量 / 热榜 / 分类人气，支持分类交集筛选、收藏夹与制作者追踪——数据与封面全部只存在你本机。*
+> *跨平台（Windows / macOS）的 DLsite 同人游戏浏览与筛选应用：每日自动更新销量 / 热榜 / 分类人气，支持分类交集筛选、收藏夹与制作者追踪——数据与封面全部只存在你本机。*
 
 [中文](README.md) · **English**
 
@@ -12,20 +12,20 @@
 
 ## What it does
 
-The pipeline collects public DLsite product metadata (title / circle / price / rating / review count / sales / genres / rankings …) into a local SQLite database, and exports it as JSON / CSV plus cover thumbnails. A companion macOS app reads the export and provides browsing, filtering, favorites and one-click updates. **The app itself never uses the network** — all crawling happens inside the pipeline.
+The pipeline collects public DLsite product metadata (title / circle / price / rating / review count / sales / genres / rankings …) into a local SQLite database, and exports it as JSON / CSV plus cover thumbnails. Companion desktop apps (Windows / macOS, plus a native macOS app) read the export and provide browsing, filtering, favorites and one-click updates. **The apps never use the network** — all crawling happens inside the pipeline.
 
 ## Highlights
 
 - **Daily maintenance** (default 23:30): hot rankings / on-ranking sales / genre popularity / official popularity order
-- **Two-tier one-click update in the app**: "Quick hot update" (~2–4 min) and "Full maintenance" (adds genre pages, covers, import resume)
-- **Filters**: genre multi-select with **intersection** (all must match), genre exclusion, rating / sales / price / work form / release year / content badges (voice · music · video)
-- **Sorting**: sales / rating / price / release date (new→old) / daily·weekly·monthly rank / official popularity
-- **Favorites** (a work can belong to multiple collections), **maker following**, **hover detail popover**, five view modes (⌘1–⌘5)
-- Live progress banner during updates; auto-reload when finished
+- **Two-tier one-click update in the app**: "Quick hot update" (~1–2 min) and "Full maintenance" (adds genre pages, covers, import resume); the list **auto-refreshes** when done
+- **Filters**: keyword, genre intersection, release year, sales / price / rating, favorites & collections, followed makers only
+- **Sorting**: sales / rating / price / release date / title
+- **Favorites** (a work can belong to multiple collections), **maker following**, **hover detail card**, **right-click quick menu**, five view modes (grid / cover wall / bottom info bar / compact list / strip)
+- Live progress banner during updates; list auto-refreshes when finished
 
 ## Quick start
 
-Requirements: **macOS + Python ≥ 3.9** (standard library only, zero third-party dependencies — no `pip install` needed).
+Requirements: **macOS / Windows / Linux + Python ≥ 3.9** (standard library only, zero third-party dependencies — no `pip install` needed).
 
 ```bash
 git clone https://github.com/Faintimi/dlsite-tracker.git
@@ -50,21 +50,41 @@ bash scripts/install-schedule.sh          # daily 23:30 maintenance (launchd, no
 
 > Note: because of polite rate limiting (≥10 s per page), the first full import takes some patience; afterwards only fast incremental updates run.
 
-## Desktop app (macOS)
+## Desktop apps
+
+Two UIs to choose from (both read the same `out/works.json`; favorites and settings are stored per app, so they never interfere):
+
+### Cross-platform desktop (Windows / macOS, recommended)
+
+- **Windows**: download the latest `doujin-game-radar-windows-installer` artifact from [Actions "Desktop Build (Windows)"](https://github.com/Faintimi/dlsite-tracker/actions/workflows/desktop-release.yml) (or the Release page)
+- **Build it yourself** (macOS / Windows):
+
+```bash
+cd desktop
+npm install
+npm run tauri build        # output: src-tauri/target/release/bundle/ (.app/.dmg on macOS, NSIS on Windows)
+```
+
+- First launch: click **Open data file…** and pick the exported `out/works.json` — it is remembered afterwards
+- **Update ▾**: quick hot update / full maintenance / deeper import / import last N years; a live banner shows progress and the list auto-refreshes when done (requires Python ≥ 3.9 + this repo's pipeline)
+- Features: filters (genre intersection / year / sales / price / rating / favorites / followed makers), sorting, five view modes, hover detail card, collections and a right-click menu
+- See [`desktop/README.md`](desktop/README.md) / [`desktop/README_EN.md`](desktop/README_EN.md)
+
+### Native macOS app (SwiftUI)
 
 ```bash
 bash scripts/build-app.sh                 # build (needs only Xcode Command Line Tools)
 open "app/dist/同人游戏筛选器.app"
 ```
 
-In the app: "Select data file" → choose the exported `out/works.json`. Press "Update" to re-read after the pipeline runs (it exports locally first, then re-reads). See [`app/README.md`](app/README.md) (Chinese) / [`app/README_EN.md`](app/README_EN.md) for details.
+In the app: "Select data file" → choose the exported `out/works.json`. See [`app/README.md`](app/README.md) / [`app/README_EN.md`](app/README_EN.md).
 
 ## Privacy & security
 
 - No login, no cookies, no tokens; no user content is ever collected
 - Crawling is limited to public pages / public site APIs, strictly following robots (`Crawl-delay: 10`)
 - All data and covers are written only to local `data/` and `out/` (git-ignored, never committed)
-- The app is offline; "Start update" merely launches this repository's scripts on your machine
+- The apps are offline; "Update" merely launches this repository's fixed task chains on your machine (`scripts/*.sh` / `python -m dlsite_tracker task …`)
 - This repository contains code and docs only — no personal data, no store content
 
 ## Data sources & compliance
