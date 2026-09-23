@@ -35,6 +35,7 @@
   import { ICONS, categoriesOf } from "$lib/ui";
   import CompactRow from "$lib/CompactRow.svelte";
   import CoverTile from "$lib/CoverTile.svelte";
+  import Discover from "$lib/Discover.svelte";
   import LargeRow from "$lib/LargeRow.svelte";
   import MediumCard from "$lib/MediumCard.svelte";
   import {
@@ -141,6 +142,8 @@
   let updateError = $state("");
 
   let view = $state<ViewMode>(normalizeView(prefs.data.displayMode));
+  /** 主区模式：浏览（列表）/ 发现（口味匹配与黑马信号） */
+  let mode = $state<"browse" | "discover">("discover"); // TEMP-DEBUG
   let sort = $state<SortKey>("sales");
   let filter = $state<FilterState>(emptyFilter());
   let viewFilter = $state<ViewFilter>({ kind: "all" });
@@ -220,6 +223,8 @@
     return new Set<string>();
   });
   const filtered = $derived(applyFilters(works, filter, sort, { viewFilter, favoriteIds }));
+  /** 发现系统：已关注作者的 key 集合（用于口味得分加分） */
+  const followedMakers = $derived(new Set(library.data.makers.map((maker) => maker.key)));
   const genres = $derived(data?.file.genres ?? []);
   const genreCatalog = $derived(data?.file.genre_catalog ?? []);
   const activeGenre = $derived(genres.find((entry) => entry.id === filter.genreFocus) ?? null);
@@ -455,6 +460,7 @@
   });
 
   onMount(() => {
+    prefs.set("taste", ["奇幻", "女主人公"]); // TEMP-DEBUG
     void library.load();
     void bootstrap();
     const timer = setInterval(() => {
@@ -880,7 +886,7 @@
 <svelte:window onkeydown={onKeydown} onclick={onWindowClick} />
 
 <div class="app">
-  {#if prefs.data.sidebarVisible}
+  {#if prefs.data.sidebarVisible && mode === "browse"}
     <Sidebar
       bind:filter
       bind:viewFilter
@@ -934,6 +940,15 @@
         <button class="btn with-icon" title="显示形式（⌘1–⌘5，记住选择）" onclick={openDisplayMenu}>
           {@html VIEWS[view].icon}
           {VIEWS[view].label}
+        </button>
+        <button
+          class="btn with-icon"
+          class:active={mode === "discover"}
+          disabled={status !== "ready"}
+          title="发现：黑马新锐 / 合口味新作 / 遗珠（本地计算，点口味即时生效）"
+          onclick={() => (mode = mode === "discover" ? "browse" : "discover")}
+        >
+          {@html ICONS.flame}{mode === "discover" ? "返回浏览" : "发现"}
         </button>
         <button
           class="btn with-icon personalization-trigger"
@@ -996,7 +1011,19 @@
       </div>
     {/if}
 
-    {#if viewFilter.kind !== "all"}
+    {#if mode === "discover" && status === "ready" && data}
+      <Discover
+        works={data.works}
+        {genres}
+        taste={prefs.data.taste}
+        {followedMakers}
+        onTasteChange={(next) => prefs.set("taste", next)}
+        onopen={(game) => openWork(game.url)}
+        onhover={enterHover}
+        onleave={leaveHover}
+      />
+    {:else}
+      {#if viewFilter.kind !== "all"}
       <div class="strip">
         <span class="strip-icon">{@html ICONS.filterCircle}</span>
         <span class="strip-title">{viewFilterTitle(viewFilter, collectionNameOf)}</span>
@@ -1213,6 +1240,7 @@
           <button class="btn" onclick={pick}>选择数据文件</button>
         {/if}
       </div>
+    {/if}
     {/if}
   </div>
 </div>

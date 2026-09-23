@@ -19,6 +19,8 @@ export interface Prefs {
   sections: SectionsState;
   /** 筛选条件内的「更多筛选」展开状态 */
   filtersMore: boolean;
+  /** 发现系统：我的口味（分类名列表，手动勾选） */
+  taste: string[];
 }
 
 function defaults(): Prefs {
@@ -30,6 +32,7 @@ function defaults(): Prefs {
     sidebarVisible: true,
     sections: { favorites: true, genres: false, filters: true, imports: false },
     filtersMore: false,
+    taste: [],
   };
 }
 

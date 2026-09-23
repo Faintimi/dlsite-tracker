@@ -15,6 +15,7 @@
 - Filters: keyword, genre intersection, year range, sales / price / rating, favorites & collections, followed makers only
 - Sorting: sales / rating / release date / price / title
 - Collections (multi-membership) and maker following; right-click quick menu; hover detail card
+- **Discover** (computed locally in real time): rising dark horses (sprinting / high-hype), new releases matching your taste, and hidden gems among older works; pick taste categories manually — every recommendation comes with an explainable reason
 - **First run**: "Initialize data" on the empty state sets everything up on your machine (fetches the hot ranking in ~5–10 minutes) — no Python install, no repository clone
 - **One-click update**: "更新数据 ▾" → quick hot update / full maintenance / deeper import / import last N years; live banner + auto-refresh when done (packaged builds use the embedded pipeline — no extra dependencies)
 

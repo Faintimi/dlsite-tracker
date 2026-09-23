@@ -32,6 +32,12 @@ export interface Work {
   music: boolean;
   video: boolean;
   genre_pos: Record<string, number>;
+  /** 发现系统信号（schema v3）：心愿单数（期待型） */
+  wishlist_count?: number | null;
+  /** 发现系统信号（schema v3）：窗口内销量增量（冲刺型） */
+  sales_delta?: number;
+  /** 销量增量的实际窗口（天） */
+  sales_delta_days?: number;
   [key: string]: unknown;
 }
 
