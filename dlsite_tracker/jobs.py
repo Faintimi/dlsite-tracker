@@ -112,6 +112,42 @@ def _append(log_file: Path, line: str) -> None:
         handle.write(line + "\n")
 
 
+def _log_tail_since(log_file: Path, offset: int) -> str:
+    """只读取当前步骤末尾的诊断信息，不把旧任务错误误认成当前失败。"""
+    try:
+        with open(log_file, "rb") as handle:
+            handle.seek(0, os.SEEK_END)
+            end = handle.tell()
+            handle.seek(max(offset, end - 32768))
+            return handle.read().decode("utf-8", errors="replace")
+    except OSError:
+        return ""
+
+
+def _daily_failure_detail(failures: Sequence[Tuple[str, str]]) -> str:
+    labels = {
+        "rankings": "热榜/新作抓取",
+        "sales": "销量刷新",
+        "images": "封面补齐",
+        "export": "数据导出",
+        "import": "渐进导入",
+    }
+    steps = "、".join(labels.get(phase, phase) for phase, _ in failures)
+    # 首个失败步骤的诊断最能说明任务为何开始出问题；后续步骤可能有独立原因。
+    logs = failures[0][1].lower()
+    if "robots.txt" in logs and ("timed out" in logs or "timeout" in logs):
+        cause = "连接 DLsite 超时（robots.txt 校验未完成）"
+    elif "connection reset" in logs or "connection refused" in logs:
+        cause = "连接 DLsite 中断"
+    elif "robots.txt" in logs:
+        cause = "DLsite 抓取规则校验未通过"
+    elif "timed out" in logs or "网络错误" in logs:
+        cause = "网络请求失败"
+    else:
+        cause = "任务步骤失败"
+    return f"每日维护未完成：{cause}；{steps}未完成。已成功步骤的数据保留，请检查网络或日志后运行「完整维护」。"
+
+
 def process_alive(pid: int) -> bool:
     """进程存活探测（跨平台；不发送任何信号）。
 
@@ -357,6 +393,7 @@ def _run_chain(
     steps: Sequence[_Step],
     runner: StepRunner,
     stop_on_failure: bool = False,
+    status_name: Optional[str] = None,
 ) -> int:
     log_file = paths.data_dir / log_name
     state_file = paths.out_dir / "update-progress.json"
@@ -370,23 +407,38 @@ def _run_chain(
         return 3
     try:
         failed = 0
+        failures: List[Tuple[str, str]] = []
         _append(log_file, f"===== {_timestamp()} {start_message} =====")
         for phase, detail, name, cli_args in steps:
             if phase == "import" and (paths.data_dir / "import.pause").exists():
                 _append(log_file, "[skip] 渐进导入已被用户暂停；不自动续传")
                 continue
             write_state(state_file, phase, detail, years_label)
+            log_offset = log_file.stat().st_size
             code = runner(log_file, name, cli_args)
             if code not in (0, 3):
                 failed = 1
+                failures.append((phase, _log_tail_since(log_file, log_offset)))
                 if stop_on_failure:
                     break
+        final_detail = (
+            _daily_failure_detail(failures) if failed and status_name else
+            failed_detail if failed else done_detail
+        )
         write_state(
             state_file,
             "done" if failed == 0 else "failed",
-            done_detail if failed == 0 else failed_detail,
+            final_detail,
             years_label,
         )
+        if status_name:
+            write_task_progress(
+                paths.out_dir / status_name,
+                "done" if failed == 0 else "failed",
+                detail=final_detail,
+                years=years_label,
+                extra={"failed_steps": [phase for phase, _ in failures]},
+            )
         _append(log_file, f"===== {_timestamp()} {end_message.format(failed)} =====")
         return 0 if failed == 0 else 1
     except KeyboardInterrupt:
@@ -411,6 +463,7 @@ def run_daily(
         failed_detail="部分步骤失败；详见 data/daily.log",
         steps=DAILY_STEPS,
         runner=runner or _make_runner(python or _default_python(), paths.config_path),
+        status_name="daily-status.json",
     )
 
 

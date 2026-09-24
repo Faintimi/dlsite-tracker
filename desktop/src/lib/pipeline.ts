@@ -9,6 +9,7 @@ export interface UpdateState {
   pid?: number;
   updated_at?: string;
   updated_ts?: number;
+  failed_steps?: string[];
 }
 
 export interface ImportProgress {
@@ -56,6 +57,7 @@ export interface ImportCoverage {
 
 interface ProgressFiles {
   update: string | null;
+  daily_status: string | null;
   import_progress: string | null;
   genre: string | null;
   import_coverage: string | null;
@@ -248,6 +250,7 @@ export function removeGenre(genre: string): Promise<string> {
 /** 读取全部进度文件并解析（文件缺失或解析失败对应字段为 null）。 */
 export async function readProgress(): Promise<{
   state: UpdateState | null;
+  dailyStatus: UpdateState | null;
   importProgress: ImportProgress | null;
   genreProgress: GenreProgress | null;
   importCoverage: ImportCoverage | null;
@@ -263,6 +266,7 @@ export async function readProgress(): Promise<{
   };
   return {
     state: parse<UpdateState>(files.update),
+    dailyStatus: parse<UpdateState>(files.daily_status),
     importProgress: parse<ImportProgress>(files.import_progress),
     genreProgress: parse<GenreProgress>(files.genre),
     importCoverage: parse<ImportCoverage>(files.import_coverage),

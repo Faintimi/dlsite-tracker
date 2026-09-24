@@ -196,6 +196,7 @@ fn out_dir_of(app: &AppHandle) -> Result<PathBuf, String> {
 #[derive(serde::Serialize)]
 struct ProgressFiles {
     update: Option<String>,
+    daily_status: Option<String>,
     import_progress: Option<String>,
     genre: Option<String>,
     import_coverage: Option<String>,
@@ -206,6 +207,7 @@ fn read_progress_files(app: AppHandle) -> Result<ProgressFiles, String> {
     let out_dir = out_dir_of(&app)?;
     Ok(ProgressFiles {
         update: fs::read_to_string(out_dir.join("update-progress.json")).ok(),
+        daily_status: fs::read_to_string(out_dir.join("daily-status.json")).ok(),
         import_progress: fs::read_to_string(out_dir.join("import-progress.json")).ok(),
         genre: fs::read_to_string(out_dir.join("genre-progress.json")).ok(),
         import_coverage: fs::read_to_string(out_dir.join("import-coverage.json")).ok(),

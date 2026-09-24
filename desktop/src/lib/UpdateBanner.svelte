@@ -1,9 +1,9 @@
 <script lang="ts">
-  // 顶部状态横幅（对齐 macOS library.banner：单行、图标 + 说明文字、强调色淡底）
-  let { icon, text }: { icon: string; text: string } = $props();
+  // 顶部状态横幅：普通进度单行显示，失败提醒允许换行以完整呈现原因。
+  let { icon, text, warning = false }: { icon: string; text: string; warning?: boolean } = $props();
 </script>
 
-<div class="banner">
+<div class:warning class="banner">
   <span class="icon">{@html icon}</span>
   <span class="text">{text}</span>
   <span class="spacer"></span>
@@ -35,5 +35,18 @@
 
   .spacer {
     flex: 1;
+  }
+
+  .banner.warning {
+    color: var(--text);
+    background: color-mix(in srgb, var(--accent) 12%, var(--panel));
+  }
+
+  .banner.warning .icon {
+    color: var(--accent);
+  }
+
+  .banner.warning .text {
+    white-space: normal;
   }
 </style>

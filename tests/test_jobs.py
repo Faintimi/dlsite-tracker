@@ -206,6 +206,15 @@ class RunStepTests(unittest.TestCase):
 
 
 class DailyChainTests(unittest.TestCase):
+    def test_daily_failure_reasons(self) -> None:
+        reset = jobs._daily_failure_detail([("rankings", "Connection reset by peer")])
+        self.assertIn("连接 DLsite 中断", reset)
+        robots = jobs._daily_failure_detail([("rankings", "robots.txt 不允许抓取")])
+        self.assertIn("抓取规则校验未通过", robots)
+        generic = jobs._daily_failure_detail([("export", "磁盘写入失败")])
+        self.assertIn("数据导出未完成", generic)
+        self.assertNotIn("网络请求失败", generic)
+
     def test_daily_does_not_resume_user_paused_import(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             paths = _paths(tmp)
@@ -240,6 +249,9 @@ class DailyChainTests(unittest.TestCase):
             state = json.loads((paths.out_dir / "update-progress.json").read_text(encoding="utf-8"))
             self.assertEqual(state["phase"], "done")
             self.assertEqual(state["years"], "daily")
+            daily_status = json.loads((paths.out_dir / "daily-status.json").read_text(encoding="utf-8"))
+            self.assertEqual(daily_status["phase"], "done")
+            self.assertEqual(daily_status["failed_steps"], [])
             log = (paths.data_dir / "daily.log").read_text(encoding="utf-8")
             self.assertIn("每日任务开始", log)
             self.assertIn("每日任务结束（FAILED=0）", log)
@@ -257,8 +269,35 @@ class DailyChainTests(unittest.TestCase):
             self.assertEqual(code, 1)
             state = json.loads((paths.out_dir / "update-progress.json").read_text(encoding="utf-8"))
             self.assertEqual(state["phase"], "failed")
+            daily_status = json.loads((paths.out_dir / "daily-status.json").read_text(encoding="utf-8"))
+            self.assertEqual(daily_status["phase"], "failed")
+            self.assertEqual(daily_status["failed_steps"], ["sales"])
+            self.assertIn("销量刷新未完成", daily_status["detail"])
             log = (paths.data_dir / "daily.log").read_text(encoding="utf-8")
             self.assertIn("每日任务结束（FAILED=1）", log)
+
+    def test_daily_network_failure_is_specific_and_success_clears_it(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = _paths(tmp)
+
+            def failed_runner(log_file: Path, _name: str, cli_args) -> int:
+                if cli_args[0] == "update":
+                    with log_file.open("a", encoding="utf-8") as handle:
+                        handle.write("ERROR 网络错误（timed out）：https://www.dlsite.com/robots.txt\n")
+                    return 1
+                return 0
+
+            self.assertEqual(jobs.run_daily(paths, runner=failed_runner), 1)
+            status_file = paths.out_dir / "daily-status.json"
+            failed = json.loads(status_file.read_text(encoding="utf-8"))
+            self.assertIn("连接 DLsite 超时", failed["detail"])
+            self.assertEqual(failed["failed_steps"], ["rankings"])
+
+            # 随后的快更不能覆盖每日状态；下一次完整维护成功才清除提醒。
+            self.assertEqual(jobs.run_quick(paths, runner=lambda *_: 0), 0)
+            self.assertEqual(json.loads(status_file.read_text(encoding="utf-8"))["phase"], "failed")
+            self.assertEqual(jobs.run_daily(paths, runner=lambda *_: 0), 0)
+            self.assertEqual(json.loads(status_file.read_text(encoding="utf-8"))["phase"], "done")
 
     def test_daily_skip_counts_as_ok(self) -> None:
         codes = iter([3, 0, 0, 0, 0])

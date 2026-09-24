@@ -176,6 +176,7 @@
   let updateMenu = $state<{ x: number; y: number } | null>(null);
 
   let progress = $state<UpdateState | null>(null);
+  let dailyStatus = $state<UpdateState | null>(null);
   let importInfo = $state<ImportProgress | null>(null);
   let genreInfo = $state<GenreProgress | null>(null);
   let coverage = $state<ImportCoverage | null>(null);
@@ -311,7 +312,7 @@
   });
 
   // 顶部横幅（对齐 macOS library.banner 的优先级：进行中优先于已结束）
-  const banner = $derived.by((): { icon: string; text: string } | null => {
+  const banner = $derived.by((): { icon: string; text: string; warning?: boolean } | null => {
     if (genreInfo?.running) {
       const text = genreSummary(genreInfo);
       if (text) return { icon: ICONS.refresh, text };
@@ -323,6 +324,10 @@
     if (importInfo?.running) {
       const text = importSummary(importInfo);
       if (text) return { icon: ICONS.refresh, text };
+    }
+    // 每日调度的结果独立持久化：手动快更写入 update-progress 后，也不能掩盖夜间失败。
+    if (dailyStatus?.phase === "failed") {
+      return { icon: ICONS.warn, text: dailyStatus.detail ?? "每日维护未完成，请检查 data/daily.log", warning: true };
     }
     if (genreInfo && !isStale(genreInfo.updated_ts, 6)) {
       const text = genreSummary(genreInfo);
@@ -828,6 +833,7 @@
       }
       const next = await readProgress();
       progressReady = true;
+      dailyStatus = next.dailyStatus;
       const state = next.state;
       if (isRunning(state)) updateStarting = false;
       if (state?.years === "bootstrap" && isRunning(state)) {
@@ -1296,9 +1302,10 @@
 
     {#if banner}
       <div class="banner-wrap">
-        <UpdateBanner icon={banner.icon} text={banner.text} />
+        <UpdateBanner icon={banner.icon} text={banner.text} warning={banner.warning} />
       </div>
-    {:else if unreadFollowUpdates.length > 0 && mode !== "followUpdates"}
+    {/if}
+    {#if unreadFollowUpdates.length > 0 && mode !== "followUpdates"}
       <button class="follow-banner" onclick={openFollowUpdates}>
         <span class="follow-banner-icon">{@html ICONS.flame}</span>
         <span>{unreadFollowMakerCount} 位关注作者发布了 {unreadFollowUpdates.length} 部近两周新作</span>
