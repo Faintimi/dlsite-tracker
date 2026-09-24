@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, untrack } from "svelte";
   import { LogicalPosition, LogicalSize } from "@tauri-apps/api/dpi";
   import { currentMonitor as currentWindowMonitor, getCurrentWindow } from "@tauri-apps/api/window";
   import { openUrl } from "@tauri-apps/plugin-opener";
@@ -159,6 +159,11 @@
   let view = $state<ViewMode>(normalizeView(prefs.data.displayMode));
   /** 主区模式：浏览（列表）/ 发现（口味匹配与黑马信号） */
   let mode = $state<"browse" | "discover" | "followUpdates">("browse");
+  let discoverReturnMode = $state<"browse" | "followUpdates">("browse");
+  let discoverVisited = $state(false);
+  let followUpdatesVisited = $state(false);
+  let returnToFollowUpdates = $state(false);
+  let manualRefreshCount = $state(0);
   let sort = $state<SortKey>("sales");
   let filter = $state<FilterState>(emptyFilter());
   const activeContentFlags = $derived(CONTENT_FLAG_TAGS.filter(({ key }) => filter.flags[key]));
@@ -493,6 +498,8 @@
   $effect(() => {
     const el = scroller;
     if (!el) return;
+    // 发现／关注更新会卸载浏览列表；返回时恢复虚拟列表的真实滚动位置。
+    el.scrollTop = untrack(() => scrollTop);
     const observer = new ResizeObserver(() => {
       viewportW = el.clientWidth;
       viewportH = el.clientHeight;
@@ -536,7 +543,8 @@
     void viewFilter;
     hideHover();
     cardMenu = null;
-    scroller?.scrollTo({ top: 0 });
+    // 只追踪上方筛选项；容器重建本身不应触发回到顶部。
+    untrack(() => scroller?.scrollTo({ top: 0 }));
     scrollTop = 0;
   });
 
@@ -634,6 +642,7 @@
       return;
     }
     await reload();
+    manualRefreshCount += 1;
     syncing = false;
   }
 
@@ -929,6 +938,7 @@
   }
 
   function showMaker(work: WorkView) {
+    returnToFollowUpdates = false;
     viewFilter = {
       kind: "maker",
       key: makerKeyOf(work.maker, work.maker_id),
@@ -1003,8 +1013,27 @@
   }
 
   function openFollowUpdates() {
+    followUpdatesVisited = true;
+    returnToFollowUpdates = false;
     mode = "followUpdates";
     library.markFollowUpdatesRead(recentFollowedWorks.map((work) => work.id));
+  }
+
+  function toggleDiscover() {
+    if (mode === "discover") {
+      if (discoverReturnMode === "followUpdates") openFollowUpdates();
+      else mode = "browse";
+    } else {
+      discoverReturnMode = mode;
+      discoverVisited = true;
+      mode = "discover";
+    }
+  }
+
+  function openMakerFromFollowUpdates(work: WorkView) {
+    showMaker(work);
+    returnToFollowUpdates = true;
+    mode = "browse";
   }
 
   async function refreshFollowUpdates() {
@@ -1027,8 +1056,9 @@
 <svelte:window onkeydown={onKeydown} onclick={onWindowClick} />
 
 <div class="app">
-  {#if prefs.data.sidebarVisible && mode !== "discover"}
+  {#if prefs.data.sidebarVisible}
     <Sidebar
+      active={mode !== "discover"}
       bind:filter
       bind:viewFilter
       bind:importYears
@@ -1056,7 +1086,10 @@
       followUpdatesSelected={mode === "followUpdates"}
       followUpdatesUnread={unreadFollowUpdates.length}
       onOpenFollowUpdates={openFollowUpdates}
-      onOpenBrowse={() => (mode = "browse")}
+      onOpenBrowse={() => {
+        returnToFollowUpdates = false;
+        mode = "browse";
+      }}
     />
   {/if}
 
@@ -1087,13 +1120,20 @@
           {VIEWS[view].label}
         </button>
         <button
+          class="btn"
+          class:active={prefs.data.hideImages}
+          aria-pressed={prefs.data.hideImages}
+          title="隐藏所有作品图片；下次打开应用仍保持当前选择"
+          onclick={() => prefs.set("hideImages", !prefs.data.hideImages)}
+        >{prefs.data.hideImages ? "显示图片" : "隐藏图片"}</button>
+        <button
           class="btn with-icon"
           class:active={mode === "discover"}
           disabled={status !== "ready"}
           title="发现：黑马新锐 / 合口味新作 / 遗珠（本地计算，点口味即时生效）"
-          onclick={() => (mode = mode === "discover" ? "browse" : "discover")}
+          onclick={toggleDiscover}
         >
-          {@html ICONS.flame}{mode === "discover" ? "返回浏览" : "发现"}
+          {@html ICONS.flame}{mode === "discover" ? (discoverReturnMode === "followUpdates" ? "返回关注更新" : "返回浏览") : "发现"}
         </button>
         <button
           class="btn with-icon personalization-trigger"
@@ -1163,8 +1203,10 @@
       </button>
     {/if}
 
-    {#if mode === "discover" && status === "ready" && data}
+    {#if discoverVisited && status === "ready" && data}
       <Discover
+        active={mode === "discover"}
+        resetScrollToken={manualRefreshCount}
         works={data.works}
         tasteProfile={prefs.data.tasteProfile}
         {followedMakers}
@@ -1177,26 +1219,30 @@
         onseen={(game) => library.markSeen(game.id)}
         oncontext={openDiscoveryMenu}
       />
-    {:else if mode === "followUpdates" && status === "ready" && data}
+    {/if}
+    {#if followUpdatesVisited && status === "ready" && data}
       <FollowUpdates
+        active={mode === "followUpdates"}
+        resetScrollToken={manualRefreshCount}
         works={recentFollowedWorks}
         unreadIds={unreadFollowUpdateIds}
         lastCheckedAt={library.data.follow_updates.last_checked_at}
         refreshing={syncing || isRunning(progress)}
         onrefresh={() => void refreshFollowUpdates()}
         onopen={(work) => openWork(work.url)}
-        onmaker={(work) => {
-          mode = "browse";
-          showMaker(work);
-        }}
+        onmaker={openMakerFromFollowUpdates}
       />
-    {:else}
+    {/if}
+    {#if mode === "browse" || status !== "ready" || !data}
       {#if viewFilter.kind !== "all"}
       <div class="strip">
         <span class="strip-icon">{@html ICONS.filterCircle}</span>
         <span class="strip-title">{viewFilterTitle(viewFilter, collectionNameOf)}</span>
         <span class="strip-count">· 命中 {filtered.length} 部</span>
         <span class="spacer"></span>
+        {#if returnToFollowUpdates}
+          <button class="link" onclick={openFollowUpdates}>返回关注更新</button>
+        {/if}
         {#if activeMaker}
           {#if activeMaker.makerId}
             <button

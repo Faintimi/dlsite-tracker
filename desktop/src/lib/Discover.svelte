@@ -13,6 +13,8 @@
   import DiscoverCard from "./DiscoverCard.svelte";
 
   let {
+    active = true,
+    resetScrollToken = 0,
     works,
     tasteProfile,
     followedMakers,
@@ -25,6 +27,8 @@
     onseen,
     oncontext,
   }: {
+    active?: boolean;
+    resetScrollToken?: number;
     works: WorkView[];
     tasteProfile: Record<string, TasteLevel>;
     followedMakers: Set<string>;
@@ -39,6 +43,11 @@
   } = $props();
 
   const expanded = $state<Record<string, boolean>>({});
+  let discoverEl: HTMLDivElement | null = $state(null);
+  let savedScrollTop = 0;
+  $effect(() => {
+    if (active && discoverEl) discoverEl.scrollTop = savedScrollTop;
+  });
   // 首屏铺满：每区显示数＝网格列数 ×2 行，避免末行留下空位（随窗口宽度自适应）。
   // 网格宽 = 发现页宽 − 页面内边距 36（18×2）− 分区内边距 28（14×2）。
   let discoverW = $state(0);
@@ -63,14 +72,29 @@
   // 「换一批」出下一批，轮完后重新洗牌。加权随机：口味分越高越容易靠前，但全池都会轮到。
   let oldOrder = $state<DiscoveryItem[]>([]);
   let oldBatch = $state(0);
-  let oldSig = ""; // 非响应式签名：仅当数据/口味变动时重洗，避免轮询重算时跳批
+  let oldSig = ""; // 新作品集合/口味变化才重洗，单个「看过」不打断探索
   $effect(() => {
-    const sig = `${works.length}|${result.old.length}|${result.old[0]?.game.id ?? ""}|${JSON.stringify(tasteProfile)}`;
+    const sig = `${works.map((work) => work.id).join(",")}|${JSON.stringify(tasteProfile)}|${[...followedMakers].sort().join(",")}`;
     if (sig !== oldSig) {
+      if (oldSig) {
+        for (const key of Object.keys(expanded)) delete expanded[key];
+        savedScrollTop = 0;
+        discoverEl?.scrollTo({ top: 0 });
+      }
       oldSig = sig;
       oldOrder = weightedShuffle(result.old);
       oldBatch = 0;
+    } else {
+      const available = new Set(result.old.map((item) => item.game.id));
+      if (oldOrder.some((item) => !available.has(item.game.id))) {
+        oldOrder = oldOrder.filter((item) => available.has(item.game.id));
+      }
     }
+  });
+  $effect(() => {
+    void resetScrollToken;
+    savedScrollTop = 0;
+    discoverEl?.scrollTo({ top: 0 });
   });
   const oldTotal = $derived(Math.max(1, Math.ceil(oldOrder.length / previewCount)));
   const oldBatchSafe = $derived(Math.min(oldBatch, oldTotal - 1));
@@ -137,7 +161,13 @@
   }
 </script>
 
-<div class="discover" bind:clientWidth={discoverW}>
+<div
+  class="discover"
+  class:inactive={!active}
+  bind:this={discoverEl}
+  bind:clientWidth={discoverW}
+  onscroll={(event) => { if (active) savedScrollTop = event.currentTarget.scrollTop; }}
+>
   <div class="d-head">
     <span class="d-head-icon">{@html ICONS.flame}</span>
     <div class="d-head-text">
@@ -227,6 +257,7 @@
     flex-direction: column;
     gap: 14px;
   }
+  .discover.inactive { display: none; }
 
   .d-head {
     display: flex;

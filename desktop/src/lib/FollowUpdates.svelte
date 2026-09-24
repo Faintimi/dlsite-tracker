@@ -4,6 +4,8 @@
   import Cover from "./Cover.svelte";
 
   let {
+    active = true,
+    resetScrollToken = 0,
     works,
     unreadIds,
     lastCheckedAt,
@@ -12,6 +14,8 @@
     onopen,
     onmaker,
   }: {
+    active?: boolean;
+    resetScrollToken?: number;
     works: WorkView[];
     unreadIds: Set<string>;
     lastCheckedAt: number;
@@ -20,6 +24,17 @@
     onopen: (work: WorkView) => void;
     onmaker: (work: WorkView) => void;
   } = $props();
+
+  let updatesEl: HTMLDivElement | null = $state(null);
+  let savedScrollTop = 0;
+  $effect(() => {
+    if (active && updatesEl) updatesEl.scrollTop = savedScrollTop;
+  });
+  $effect(() => {
+    void resetScrollToken;
+    savedScrollTop = 0;
+    updatesEl?.scrollTo({ top: 0 });
+  });
 
   const groups = $derived.by(() => {
     const byMaker = new Map<string, { name: string; works: WorkView[] }>();
@@ -65,7 +80,12 @@
   }
 </script>
 
-<div class="updates">
+<div
+  class="updates"
+  class:inactive={!active}
+  bind:this={updatesEl}
+  onscroll={(event) => { if (active) savedScrollTop = event.currentTarget.scrollTop; }}
+>
   <header>
     <div>
       <h2>关注更新</h2>
@@ -114,6 +134,7 @@
 
 <style>
   .updates { min-height: 0; flex: 1; overflow-y: auto; padding: 20px 22px 34px; }
+  .updates.inactive { display: none; }
   header { display: flex; align-items: flex-start; gap: 20px; margin-bottom: 18px; }
   h2, p { margin: 0; }
   h2 { font-size: 19px; }

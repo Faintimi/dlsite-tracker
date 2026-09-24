@@ -1,5 +1,6 @@
 <script lang="ts">
   import { ICONS } from "$lib/ui";
+  import { prefs } from "$lib/prefs.svelte";
 
   let {
     src,
@@ -19,8 +20,10 @@
   );
 </script>
 
-<div class="cover" class:rounded style={style}>
-  {#if src}
+<div class="cover" class:rounded class:private={prefs.data.hideImages} style={style}>
+  {#if prefs.data.hideImages}
+    <span class="privacy-label">已隐藏</span>
+  {:else if src}
     <img src={src} alt="" loading="lazy" decoding="async" />
   {:else}
     <span class="fallback">{@html ICONS.gamepad}</span>
@@ -39,6 +42,16 @@
 
   .cover.rounded {
     border-radius: 9px;
+  }
+
+  .cover.private {
+    background: var(--coverbg);
+  }
+
+  .privacy-label {
+    color: var(--muted);
+    font-size: 10px;
+    white-space: nowrap;
   }
 
   .cover img {

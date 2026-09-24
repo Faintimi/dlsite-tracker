@@ -12,11 +12,14 @@
 ## Features (v0.1)
 
 - Browse ~9k works: virtualized grid / cover wall / bottom info bar / compact list / strip (five view modes)
+- In public, use “隐藏图片” in the toolbar to replace every work cover with a neutral placeholder; use “显示图片” to restore them. Your choice is saved locally for the next launch and does not alter cover files.
 - Filters: keyword, genre intersection, year range, sales / price / rating, favorites & collections, followed makers only
 - Sorting: sales / rating / release date / price / title
 - Collections (multi-membership) and maker following; right-click quick menu; hover detail card
+- Following is a separate collapsible sidebar section alongside Collections: collapsed on first use, remembers its state, and keeps the unread new-release count visible in its header
 - **Discover** (computed locally in real time): rising dark horses (sprinting / high-hype), taste-matched new releases and hidden gems; a dedicated editor builds a three-level profile (love / like / show less) from visually selected favorite works, explainable collection analysis and human-oriented semantic groups; hovering for 2 seconds or opening marks a work as seen, with confirmed “Not interested” feedback
 - **Followed updates**: detects releases from followed makers within the last 14 calendar days, with a summary banner, sidebar unread count, and a cover list grouped by maker; opening the list clears unread status while NEW labels remain for the full two-week window; “Check now” starts a quick data update and detects additions after reload
+- **Navigation**: Discover returns to the page you came from and keeps its scroll position, expanded sections, and hidden-gem batch during the current session (recomputed when the work set or taste changes). A maker opened from Followed updates has a return link. Reselecting a collection or using the toolbar's manual Refresh starts at the top; background reloads preserve your place in the work list. A new launch still starts in Browse.
 - **First run**: "Initialize data" on the empty state sets everything up on your machine (fetches the hot ranking in ~5–10 minutes) — no Python install, no repository clone
 - **One-click update**: "更新数据 ▾" → quick hot update / full maintenance / deeper import / import last N years; live banner + auto-refresh when done (packaged builds use the embedded pipeline — no extra dependencies)
 - **Coordinated tasks**: a running progressive import yields at a work/page boundary for a hot-ranking update, then continues in the same process from its checkpoint. Windows and macOS use the same file locks to prevent duplicate imports and concurrent database writes. If it cannot yield safely within two minutes, the update asks you to retry later.

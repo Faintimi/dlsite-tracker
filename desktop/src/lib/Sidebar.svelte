@@ -18,6 +18,7 @@
   import YearPickerDialog from "./YearPickerDialog.svelte";
 
   let {
+    active = true,
     works,
     genres,
     genreCatalog,
@@ -44,6 +45,7 @@
     onOpenFollowUpdates,
     onOpenBrowse,
   }: {
+    active?: boolean;
     works: WorkView[];
     genres: GenreEntry[];
     genreCatalog: GenreCatalogEntry[];
@@ -272,7 +274,7 @@
   }
 </script>
 
-<aside class="sidebar">
+<aside class="sidebar" class:inactive={!active}>
   <section class="card flat">
     <button
       class="section-head"
@@ -286,7 +288,7 @@
       <span class="spacer"></span>
       {#if !prefs.data.sections.favorites}
         <span class="summary">
-          {collections.length} 收藏夹{makers.length > 0 ? ` · ${makers.length} 关注` : ""}
+          {collections.length} 收藏夹
         </span>
       {/if}
     </button>
@@ -324,28 +326,49 @@
         >
           <span class="link-icon">{@html ICONS.plus}</span>新建收藏夹
         </button>
-        {#if makers.length > 0}
-          <div class="subtitle">关注的制作者</div>
+      </div>
+    {/if}
+  </section>
+
+  <section class="card flat">
+    <button
+      class="section-head"
+      title={prefs.data.sections.follows ? "收起「关注」" : "展开「关注」"}
+      aria-expanded={prefs.data.sections.follows}
+      onclick={() => prefs.toggleSection("follows", !prefs.data.sections.follows)}
+    >
+      <span class="chev" class:open={prefs.data.sections.follows}>{@html ICONS.chevronRight}</span>
+      <span class="bar"></span>
+      <span class="sec-icon">{@html ICONS.personCircle}</span>
+      <span class="title">关注</span>
+      <span class="spacer"></span>
+      {#if !prefs.data.sections.follows}<span class="summary">{makers.length} 位作者</span>{/if}
+      {#if followUpdatesUnread > 0}
+        <span class="follow-unread">{followUpdatesUnread} 部未读</span>
+      {/if}
+    </button>
+    {#if prefs.data.sections.follows}
+      <div class="section-body" transition:slide={{ duration: SECTION_DURATION }}>
+        <NavRow
+          icon={ICONS.flame}
+          title="关注更新"
+          count={followUpdatesUnread > 0 ? followUpdatesUnread : null}
+          selected={followUpdatesSelected}
+          onclick={onOpenFollowUpdates}
+        />
+        {#if makers.length > 0}<div class="subtitle">关注的作者（{makers.length}）</div>{/if}
+        {#each makers as maker (maker.key)}
           <NavRow
-            icon={ICONS.flame}
-            title="关注更新"
-            count={followUpdatesUnread}
-            selected={followUpdatesSelected}
-            onclick={onOpenFollowUpdates}
+            icon={ICONS.personCircle}
+            title={maker.name}
+            selected={!followUpdatesSelected && viewFilter.kind === "maker" && viewFilter.key === maker.key}
+            onclick={() => {
+              onOpenBrowse();
+              viewFilter = { kind: "maker", key: maker.key, name: maker.name, makerId: maker.maker_id };
+            }}
+            onmenu={(event) => openMakerMenu(maker, event)}
           />
-          {#each makers as maker (maker.key)}
-            <NavRow
-              icon={ICONS.personCircle}
-              title={maker.name}
-              selected={!followUpdatesSelected && viewFilter.kind === "maker" && viewFilter.key === maker.key}
-              onclick={() => {
-                onOpenBrowse();
-                viewFilter = { kind: "maker", key: maker.key, name: maker.name, makerId: maker.maker_id };
-              }}
-              onmenu={(event) => openMakerMenu(maker, event)}
-            />
-          {/each}
-        {/if}
+        {/each}
       </div>
     {/if}
   </section>
@@ -681,6 +704,7 @@
     flex-direction: column;
     gap: 10px;
   }
+  .sidebar.inactive { display: none; }
 
   /* 控制区 = 无边框浅底圆角组（系统设置内容区那种 inset 分组） */
   .card {
@@ -758,6 +782,17 @@
     font-size: 11.5px;
     color: var(--muted);
     font-weight: 400;
+    white-space: nowrap;
+  }
+
+  .follow-unread {
+    flex: none;
+    border-radius: 999px;
+    padding: 2px 6px;
+    background: color-mix(in srgb, var(--accent) 13%, transparent);
+    color: var(--accent);
+    font-size: 10.5px;
+    font-weight: 650;
     white-space: nowrap;
   }
 

@@ -3,6 +3,7 @@ const KEY = "radar.prefs.v1";
 
 export interface SectionsState {
   favorites: boolean;
+  follows: boolean;
   genres: boolean;
   filters: boolean;
   imports: boolean;
@@ -14,8 +15,9 @@ export interface Prefs {
   showBadges: boolean;
   showDiscount: boolean;
   showRatingCount: boolean;
+  hideImages: boolean;
   sidebarVisible: boolean;
-  /** 侧栏分区展开状态（收藏 / 分类人气 / 筛选条件 / 渐进导入） */
+  /** 侧栏分区展开状态（收藏 / 关注 / 分类人气 / 筛选条件 / 渐进导入） */
   sections: SectionsState;
   /** 筛选条件内的「更多筛选」展开状态 */
   filtersMore: boolean;
@@ -39,8 +41,9 @@ function defaults(): Prefs {
     showBadges: true,
     showDiscount: true,
     showRatingCount: true,
+    hideImages: false,
     sidebarVisible: true,
-    sections: { favorites: true, genres: false, filters: true, imports: false },
+    sections: { favorites: true, follows: false, genres: false, filters: true, imports: false },
     filtersMore: false,
     taste: [],
     tasteProfile: {},
@@ -55,7 +58,11 @@ function load(): Prefs {
     const raw = localStorage.getItem(KEY);
     if (raw) {
       const parsed = JSON.parse(raw) as Partial<Prefs>;
-      const loaded = { ...defaults(), ...parsed };
+      const base = defaults();
+      const sections = parsed.sections && typeof parsed.sections === "object" && !Array.isArray(parsed.sections)
+        ? parsed.sections : {};
+      const loaded = { ...base, ...parsed, sections: { ...base.sections, ...sections } };
+      if (typeof loaded.hideImages !== "boolean") loaded.hideImages = false;
       if (!loaded.tasteProfile || typeof loaded.tasteProfile !== "object" || Array.isArray(loaded.tasteProfile)) {
         loaded.tasteProfile = {};
       }
