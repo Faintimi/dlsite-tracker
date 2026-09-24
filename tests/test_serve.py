@@ -72,6 +72,13 @@ class ServeTest(unittest.TestCase):
         self.assertEqual(rows[0]["id"], "RJ1")
         self.assertEqual(rows[0]["rank_day_current"], 3)
 
+        rows = query_works(self.db, self.out, sort="price", order="desc")
+        self.assertEqual([row["id"] for row in rows], ["RJ2", "RJ3", "RJ1"])
+
+        rows = query_works(self.db, self.out, sort="price; DROP TABLE works--", order="desc; DROP TABLE works--")
+        self.assertEqual([row["id"] for row in rows], ["RJ1", "RJ2", "RJ3"])
+        self.assertEqual(len(query_works(self.db, self.out)), 3)
+
         self.assertEqual(len(query_works(self.db, self.out, limit=1)), 1)
         self.assertEqual(len(query_works(self.db, self.out, limit=0)), 1)  # 下限钳制为 1
 

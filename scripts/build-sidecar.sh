@@ -5,7 +5,7 @@
 # 说明：
 #   - 本地 `npm run tauri build` 打包桌面版前需先跑本脚本（产物不入库）；
 #   - 仅 `npm run tauri dev` 开发时不需要（开发态回退「仓库 + 系统 Python」）；
-#   - PyInstaller 只是构建期工具（运行期仍为零第三方依赖），安装在临时 venv 中；
+#   - PyInstaller 只是构建期工具（运行期仍为零第三方依赖），按 requirements-build.txt 安装在临时 venv 中；
 #   - Windows（Git Bash / CI）同样可用。
 set -euo pipefail
 
@@ -33,9 +33,17 @@ else
   VENV_BIN="$VENV/bin"
 fi
 if [ ! -x "$VENV_BIN/pyinstaller$EXE_SUFFIX" ]; then
-  echo "首次构建：创建打包 venv 并安装 PyInstaller…"
+  echo "首次构建：创建打包 venv…"
   "$PYTHON" -m venv "$VENV"
-  "$VENV_BIN/pip" install -q --disable-pip-version-check pyinstaller
+fi
+
+REQUIRED_PYINSTALLER_VERSION="$(sed -n 's/^pyinstaller==//p' "$PROJECT_DIR/requirements-build.txt")"
+if [ -z "$REQUIRED_PYINSTALLER_VERSION" ]; then
+  echo "requirements-build.txt 缺少 PyInstaller 版本" >&2
+  exit 1
+fi
+if [ "$("$VENV_BIN/pyinstaller$EXE_SUFFIX" --version 2>/dev/null || true)" != "$REQUIRED_PYINSTALLER_VERSION" ]; then
+  "$VENV_BIN/pip" install -q --disable-pip-version-check -r "$PROJECT_DIR/requirements-build.txt"
 fi
 
 "$VENV_BIN/pyinstaller$EXE_SUFFIX" \

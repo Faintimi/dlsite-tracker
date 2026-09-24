@@ -29,10 +29,13 @@ from .export import (
 LOG = logging.getLogger("dlsite_tracker.serve")
 
 MAX_LIMIT = 500
-SORTABLE = {
-    "workno", "price", "rating_star", "sales",
-    "rank_day", "rank_week", "rank_month", "regist_date", "updated_at",
-    "rank_day_current", "rank_week_current", "rank_month_current",
+# 外部 sort 只作为查表键；SQL 中只插入这里定义的固定列名，绝不回填请求原文。
+SORT_COLUMNS = {
+    name: f"w.{name}" for name in (
+        "workno", "price", "rating_star", "sales",
+        "rank_day", "rank_week", "rank_month", "regist_date", "updated_at",
+        "rank_day_current", "rank_week_current", "rank_month_current",
+    )
 }
 LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
 
@@ -60,7 +63,7 @@ def query_works(
     offset: Any = 0,
 ) -> List[Dict[str, Any]]:
     """按条件查询作品（只读）。排序字段走白名单，其余一律参数化。"""
-    sort_column = sort if sort in SORTABLE else "workno"
+    sort_column = SORT_COLUMNS.get(sort, SORT_COLUMNS["workno"])
     direction = "DESC" if str(order).lower() == "desc" else "ASC"
     try:
         limit_value = max(1, min(int(limit), MAX_LIMIT))
@@ -97,7 +100,7 @@ def query_works(
 
     sql = (
         f"{WORK_SELECT} WHERE {' AND '.join(clauses)} "
-        f"ORDER BY (w.{sort_column} IS NULL), w.{sort_column} {direction} "
+        f"ORDER BY ({sort_column} IS NULL), {sort_column} {direction} "
         "LIMIT ? OFFSET ?"
     )
     args.extend([limit_value, offset_value])

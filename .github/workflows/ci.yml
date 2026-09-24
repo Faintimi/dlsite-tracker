@@ -1,0 +1,44 @@
+name: Checks
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  python:
+    name: Python tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.9"
+      - name: Test pipeline
+        env:
+          NO_PROXY: localhost,127.0.0.1
+          no_proxy: localhost,127.0.0.1
+        run: |
+          python -m compileall -q dlsite_tracker tests
+          python -m unittest discover -s tests
+
+  desktop:
+    name: Desktop checks
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - run: npm ci
+      - run: npm run check
+      - run: node --test tests/*.test.mjs
+      - run: npm run build
