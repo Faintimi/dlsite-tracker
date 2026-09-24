@@ -20,7 +20,6 @@ jobs:
       - name: Test pipeline
         env:
           NO_PROXY: localhost,127.0.0.1
-          no_proxy: localhost,127.0.0.1
         run: |
           python -m compileall -q dlsite_tracker tests
           python -m unittest discover -s tests
