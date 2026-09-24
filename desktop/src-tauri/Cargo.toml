@@ -1,6 +1,6 @@
 [package]
 name = "doujin-game-radar"
-version = "0.2.0"
+version = "0.3.0"
 description = "同人游戏雷达 · Doujin Game Radar — desktop UI"
 authors = ["Faintimi"]
 edition = "2021"
