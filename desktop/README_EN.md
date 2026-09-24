@@ -4,14 +4,16 @@
 
 > Cross-platform (Windows / macOS) desktop app: **Tauri 2 + SvelteKit**; packaged builds **embed the data pipeline** (no Python required) — data, covers and favorites never leave your machine.
 
+DLsite remains the source for product information and purchases. Radar organizes public product data into a longer-term personal discovery workflow: spot potential hits from sales changes and wishlist signals, intersect independent filters, explore older works through your own taste profile, and catch new releases from followed creators. Reasons and source signals are visible, while collections and taste preferences stay local; purchases and downloads remain on the official store. The feature list describes the current source tree; consult each release's notes for what a published installer includes.
+
 ## Download
 
 - **Windows**: grab `doujin-game-radar-windows-installer` from the latest ["Desktop Build (Windows)"](https://github.com/Faintimi/dlsite-tracker/actions/workflows/desktop-release.yml) run (or the Release page)
 - **macOS / build it yourself**: run `bash scripts/build-sidecar.sh` at the repository root first (builds the embedded pipeline), then `npm install && npm run tauri build` (requirements below)
 
-## Features (v0.1)
+## Features
 
-- Browse ~9k works: virtualized grid / cover wall / bottom info bar / compact list / strip (five view modes)
+- Browse works imported into your local library: virtualized grid / cover wall / bottom info bar / compact list / strip (five view modes)
 - In public, use “隐藏图片” in the toolbar to replace every work cover with a neutral placeholder; use “显示图片” to restore them. Your choice is saved locally for the next launch and does not alter cover files.
 - Filters: keyword, genre intersection, year range, sales / price / rating, favorites & collections, followed makers only
 - Sorting: sales / rating / release date / price / title

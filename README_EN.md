@@ -1,31 +1,40 @@
 # Doujin Game Radar · 同人游戏雷达
 
-> **A cross-platform desktop browser & filter for DLsite doujin games (Windows / macOS)**, backed by a robots-compliant daily data pipeline: sales / hot rankings / genre popularity refreshed every day — with genre-intersection filters, favorites and maker tracking. **All data and cover images stay on your machine.**
+> **Go beyond the current charts to find works that fit you.** Doujin Game Radar turns public DLsite product information into a personal discovery workspace for Windows and macOS: follow new releases and changing popularity, combine filters, build a taste profile, and organize favorite works and creators. Your library, covers, and preferences stay on your machine.
 >
-> *跨平台（Windows / macOS）的 DLsite 同人游戏浏览与筛选应用：每日自动更新销量 / 热榜 / 分类人气，支持分类交集筛选、收藏夹与制作者追踪——数据与封面全部只存在你本机。*
+> *不只浏览热榜，更要找到适合自己的作品：发现黑马、建立口味、关注作者，在本机整理自己的游戏库。*
 
 [中文](README.md) · **English**
 
-- **Local-first**: no account, no telemetry, no cloud; neither the app nor the pipeline sends any data anywhere
-- **Compliant crawling**: only public pages and the site's own public APIs, strict robots compliance (`Crawl-delay: 10`), public metadata only
-- **Unofficial project**: not affiliated with DLsite; the store contains adult content — intended for adult users
+- **Local-first**: no DLsite account required; the library, covers, collections, and taste preferences remain local, with no telemetry or cloud sync. The update pipeline does request public product information from DLsite.
+- **Respect the source**: the pipeline observes robots rules and polite rate limits, reading public product metadata only; purchases and downloads remain on the official store.
+- **Unofficial project**: not affiliated with DLsite; the store contains adult content — intended for adult users.
 
-## What it does
+## Why use Radar?
 
-The pipeline collects public DLsite product metadata (title / circle / price / rating / review count / sales / genres / rankings …) into a local SQLite database, and exports it as JSON / CSV plus cover thumbnails. Companion desktop apps (Windows / macOS, plus a native macOS app) read the export and provide browsing, filtering, favorites and one-click updates. **The apps never use the network** — all crawling happens inside the pipeline.
+DLsite is the source for product information and purchases. Radar complements it with a cross-work, over-time workflow centered on your own interests. It does not handle transactions or pass off local inferences as official conclusions. Instead of starting over with each search or chart, you can carry these jobs forward in one persistent workspace:
 
-## Highlights
+| Common starting point | What Radar adds |
+| --- | --- |
+| Check today's charts and look for the next breakout | Discover combines changes between local sales snapshots and wishlist signals to surface rising and high-interest works. Each candidate has a reason; these suggestions are not official rankings. |
+| Search a genre, then try to narrow the results | Intersect genres and independently combine work formats, voice/music/video flags, year, sales, rating, price, and exclusions. Remove an active filter directly from the results view. |
+| Finish a work you like and look for unseen similar works | Build a three-level taste profile (love / like / show less) from favorite works, collections, and semantic themes. Hidden gems appear in batches; seen and dismissed feedback remains local. |
+| Remember creators you like and watch for new releases | Followed Updates groups works released in the past 14 days by creator, with unread indicators and an on-demand check. |
+| Browse repeatedly and want a lasting personal library | Use multiple collections, genre-popularity lists, and five viewing modes. Daily maintenance and progressive import show progress and resume from checkpoints; covers are filled in as tasks run. |
 
-- **Daily maintenance** (default 23:30): hot rankings / on-ranking sales / genre popularity / official popularity order
-- **Two-tier one-click update in the app**: "Quick hot update" (~1–2 min) and "Full maintenance" (adds genre pages, covers, import resume); the list **auto-refreshes** when done
-- **Filters**: keyword, genre intersection, release year, sales / price / rating, favorites & collections, followed makers only
-- **Sorting**: sales / rating / price / release date / title
-- **Favorites** (a work can belong to multiple collections), **maker following**, **hover detail card**, **right-click quick menu**, five view modes (grid / cover wall / bottom info bar / compact list / strip)
-- Live progress banner during updates; list auto-refreshes when finished
+Precise ratings are another example: cards retain an easy-to-scan star score, while hover details show the official two-decimal rating; works at 4.70 or above have a distinct color tier. “Sales change” is calculated from public snapshots taken at different times, not live transactions. Taste matches are local suggestions, not official evaluations.
 
-## Quick start
+## How it works
 
-Requirements: **macOS / Windows / Linux + Python ≥ 3.9** (standard library only, zero third-party dependencies — no `pip install` needed).
+The bundled pipeline fetches public product metadata from DLsite pages and APIs, stores it in local SQLite, and exports JSON / CSV plus cover thumbnails. The desktop interface reads local exports. When you request an update, the local pipeline fetches fresh public data and the interface reloads after completion. There is no account sync, and the app does not replace official product pages. Initial import and subsequent backfills depend on network conditions, catalog size, and site rate limits.
+
+## Try the desktop app first
+
+Packaged Windows / macOS builds include the pipeline: **no Python or repository clone is needed at runtime**. Download your platform's build from [Releases](https://github.com/Faintimi/dlsite-tracker/releases), then choose “初始化数据” (Initialize data) on first launch. Imported works appear progressively and their covers follow. Builds are also available through [Actions artifacts](https://github.com/Faintimi/dlsite-tracker/actions/workflows/desktop-release.yml). The feature overview above describes the current source tree; see each release's notes for what a published installer includes. See the [desktop guide](desktop/README_EN.md) for details.
+
+## Command line / developer quick start
+
+Running the pipeline separately requires **macOS / Windows / Linux + Python ≥ 3.9** (standard library only, no `pip install`). Packaged desktop users can skip this section.
 
 ```bash
 git clone https://github.com/Faintimi/dlsite-tracker.git
@@ -43,9 +52,9 @@ python3 -m dlsite_tracker --help          # all commands
 One-shot chains (same as the app buttons):
 
 ```bash
-bash scripts/quick-update.sh              # quick hot update (~2–4 min)
+bash scripts/quick-update.sh              # quick hot update (initial precise-rating backfill takes longer)
 bash scripts/update-all.sh 1              # import last year → sales → covers → export
-bash scripts/install-schedule.sh          # daily 23:30 maintenance (launchd, no sudo; uninstall: uninstall-schedule.sh)
+bash scripts/install-schedule.sh          # macOS: daily 23:30 maintenance (launchd, no sudo; uninstall: uninstall-schedule.sh)
 ```
 
 > Note: because of polite rate limiting (≥10 s per page), the first full import takes some patience; afterwards only fast incremental updates run.
@@ -60,13 +69,14 @@ Two UIs to choose from (both read the same `out/works.json`; favorites and setti
 - **Build it yourself** (macOS / Windows):
 
 ```bash
+bash scripts/build-sidecar.sh   # create the embedded pipeline before packaging
 cd desktop
 npm install
 npm run tauri build        # output: src-tauri/target/release/bundle/ (.app/.dmg on macOS, NSIS on Windows)
 ```
 
-- First launch: click **Open data file…** and pick the exported `out/works.json` — it is remembered afterwards
-- **Update ▾**: quick hot update / full maintenance / deeper import / import last N years; a live banner shows progress and the list auto-refreshes when done (requires Python ≥ 3.9 + this repo's pipeline)
+- First launch: choose **Initialize data** to build the local library without installing Python; an existing `out/works.json` can also be selected manually
+- **Update ▾**: quick hot update / full maintenance / deeper import / import last N years; a live banner shows progress and the list auto-refreshes when done (packaged builds use the embedded pipeline)
 - Features: filters (genre intersection / year / sales / price / rating / favorites / followed makers), sorting, five view modes, hover detail card, collections and a right-click menu
 - See [`desktop/README.md`](desktop/README.md) / [`desktop/README_EN.md`](desktop/README_EN.md)
 
@@ -77,14 +87,14 @@ bash scripts/build-app.sh                 # build (needs only Xcode Command Line
 open "app/dist/同人游戏筛选器.app"
 ```
 
-In the app: "Select data file" → choose the exported `out/works.json`. See [`app/README.md`](app/README.md) / [`app/README_EN.md`](app/README_EN.md).
+In the app: "Select data file" → choose the exported `out/works.json`. It reads the same export, but new Discover, taste, and Followed Updates features are in the cross-platform desktop app. See [`app/README.md`](app/README.md) / [`app/README_EN.md`](app/README_EN.md).
 
 ## Privacy & security
 
 - No login, no cookies, no tokens; no user content is ever collected
 - Crawling is limited to public pages / public site APIs, strictly following robots (`Crawl-delay: 10`)
-- All data and covers are written only to local `data/` and `out/` (git-ignored, never committed)
-- The apps are offline; "Update" merely launches this repository's fixed task chains on your machine (`scripts/*.sh` / `python -m dlsite_tracker task …`)
+- Data and covers are written to local `data/` and `out/` (git-ignored, never committed); desktop collections and taste preferences are local too
+- The desktop interface reads local data; “Update” starts a local pipeline that requests public metadata from DLsite without uploading your collections or taste profile
 - This repository contains code and docs only — no personal data, no store content
 
 ## Data sources & compliance
@@ -93,7 +103,7 @@ In the app: "Select data file" → choose the exported `out/works.json`. See [`a
 | --- | --- | --- |
 | Sitemap | full / incremental discovery | public entrypoint provided for crawlers |
 | `product.json` | per-work details (title / circle / price / rating / genres …) | public JSON |
-| `product/info/ajax` (batched, 80 per request) | sales / wishlist count / type / release date | public site API; rate-limited |
+| `product/info/ajax` (batched, 80 per request) | sales / wishlist count / precise rating / type / release date | public site API; rate-limited |
 | Ranking / listing / genre-popularity / popularity-order pages | rank & sales snapshots | ≥10 s between pages |
 
 - Please read DLsite's terms of use and robots rules before using this project; for personal study & research use only
