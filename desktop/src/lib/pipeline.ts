@@ -99,7 +99,8 @@ export function phaseLabel(state: UpdateState | null | undefined): string {
     case "rankings":
       return "正在抓取热榜（榜单/列表/人气序）并富化新作…";
     case "sales":
-      return "正在刷新在榜作品销量…";
+      return state.detail?.startsWith("正在补齐精确评分")
+        ? state.detail : "正在刷新在榜作品销量…";
     case "images":
       return "正在补齐封面…";
     case "export":
@@ -139,7 +140,8 @@ export function updateSummary(
       }
       return `更新中${scope}：导入进行中（断点续传）`;
     case "sales":
-      return `更新中${scope}：正在刷新销量…`;
+      return `更新中${scope}：${state.detail?.startsWith("正在补齐精确评分")
+        ? state.detail : "正在刷新销量…"}`;
     case "images":
       return `更新中${scope}：${state.detail || "正在补齐封面…"}`;
     case "export":

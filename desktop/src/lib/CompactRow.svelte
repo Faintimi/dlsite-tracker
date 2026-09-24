@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { WorkView } from "$lib/api";
-  import { ICONS, compactDateText, fmtNum, ratingColor, ratingText } from "$lib/ui";
+  import { ICONS, cardRatingColor, compactDateText, fmtNum, ratingText } from "$lib/ui";
   import Cover from "./Cover.svelte";
   import GameBadges from "./GameBadges.svelte";
   import GamePrice from "./GamePrice.svelte";
@@ -54,7 +54,7 @@
     <span class="meta date">{compactDateText(game.regist_date)}</span>
   {/if}
   <span class="meta sales">{fmtNum(game.sales)}</span>
-  <span class="meta rating" style:color={ratingColor(game.rating)}>{ratingText(game, showRatingCount)}</span>
+  <span class="meta rating" style:color={cardRatingColor(game)}>{ratingText(game, showRatingCount)}</span>
   <span class="price-box"><GamePrice {game} {showDiscount} /></span>
   <HeartButton id={game.id} />
   <button

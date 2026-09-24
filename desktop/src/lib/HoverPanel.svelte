@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { GenreEntry, WorkView } from "$lib/api";
-  import { ICONS, categoriesOf, fmtNum, formsOf, ratingColor, ratingText } from "$lib/ui";
+  import { ICONS, categoriesOf, fmtNum, formsOf, preciseRatingColor, preciseRatingText } from "$lib/ui";
   import CategoryChips from "./CategoryChips.svelte";
   import FormChips from "./FormChips.svelte";
   import GameBadges from "./GameBadges.svelte";
@@ -60,8 +60,8 @@
   <div class="hc-divider"></div>
   <div class="hc-line">
     <span class="li">{@html ICONS.bag}<span>{fmtNum(game.sales)}</span></span>
-    <span class="li" style:color={ratingColor(game.rating)}>
-      {@html ICONS.star}<span>{ratingText(game, true)}</span>
+    <span class="li" style:color={preciseRatingColor(game.rating_precise)}>
+      {@html ICONS.star}<span>{preciseRatingText(game)}</span>
     </span>
   </div>
   <div class="hc-line">

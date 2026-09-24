@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import re
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
@@ -61,6 +62,17 @@ def _as_count(value: Any) -> int | None:
     return int(value)
 
 
+def parse_precise_rating(value: Any) -> float | None:
+    """官方两位小数评分；非法或缺失时不伪造精度。"""
+    if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+        return None
+    try:
+        rating = float(value)
+    except ValueError:
+        return None
+    return round(rating, 2) if math.isfinite(rating) and 0 < rating <= 5 else None
+
+
 def parse_sales(payload: Any) -> Dict[str, Tuple[int | None, int | None]]:
     """解析 info/ajax 响应：workno → (dl_count, wishlist_count)（缺字段为 None）。"""
     values: Dict[str, Tuple[int | None, int | None]] = {}
@@ -92,7 +104,7 @@ def fetch_sales(
 def parse_product_info(payload: Any) -> Dict[str, Dict[str, Any]]:
     """解析为完整信息（P13/P16）：workno → {dl_count, wishlist_count, work_type,
 
-    regist_date, options}。字段缺失时保留 None/空串，由调用方决定回退（如逐件抓详情）。
+    regist_date, options, rating_precise, rating_count}。缺失时保留 None/空串。
     """
     infos: Dict[str, Dict[str, Any]] = {}
     if not isinstance(payload, dict):
@@ -100,12 +112,16 @@ def parse_product_info(payload: Any) -> Dict[str, Dict[str, Any]]:
     for workno, item in payload.items():
         if not isinstance(item, dict):
             continue
+        rating_count = _as_count(item.get("rate_count"))
+        precise_rating = parse_precise_rating(item.get("rate_average_2dp"))
         infos[str(workno)] = {
             "dl_count": _as_count(item.get("dl_count")),
             "wishlist_count": _as_count(item.get("wishlist_count")),
             "work_type": str(item.get("work_type") or ""),
             "regist_date": str(item.get("regist_date") or ""),
             "options": parse_options(item.get("options")),
+            "rating_precise": precise_rating if rating_count != 0 else None,
+            "rating_count": rating_count,
         }
     return infos
 
@@ -147,6 +163,30 @@ def save_sales(
     return len(values)
 
 
+def save_product_info(
+    store: Store, site: str, infos: Dict[str, Dict[str, Any]],
+    source: str = "info-ajax", queried_worknos: Optional[Sequence[str]] = None,
+) -> int:
+    """统一落库批查字段，避免导入/富化/刷新任一路径丢掉精确评分。"""
+    values = {
+        workno: (info["dl_count"], info["wishlist_count"])
+        for workno, info in infos.items()
+        if info["dl_count"] is not None or info["wishlist_count"] is not None
+    }
+    options = {workno: info["options"] for workno, info in infos.items() if info["options"]}
+    updated = save_sales(store, site, values, source=source, options=options)
+    ratings = {
+        workno: info["rating_precise"] for workno, info in infos.items()
+        if info["rating_precise"] is not None
+    }
+    counts = {
+        workno: info["rating_count"] for workno, info in infos.items()
+        if info["rating_count"] is not None
+    }
+    store.record_precise_ratings(site, queried_worknos or list(infos), ratings, counts)
+    return updated
+
+
 def sync_sales(
     fetcher: Fetcher,
     store: Store,
@@ -160,13 +200,5 @@ def sync_sales(
         return {"queried": 0, "updated": 0, "missing": 0}
     site = cfg.sites[0] if getattr(cfg, "sites", None) else "maniax"
     infos = fetch_product_info(fetcher, site, ids)
-    values = {
-        workno: (info["dl_count"], info["wishlist_count"])
-        for workno, info in infos.items()
-        if info["dl_count"] is not None or info["wishlist_count"] is not None
-    }
-    options = {
-        workno: info["options"] for workno, info in infos.items() if info["options"]
-    }
-    save_sales(store, site, values, source=source, options=options)
-    return {"queried": len(ids), "updated": len(values), "missing": len(ids) - len(values)}
+    updated = save_product_info(store, site, infos, source=source, queried_worknos=ids)
+    return {"queried": len(ids), "updated": updated, "missing": len(ids) - updated}

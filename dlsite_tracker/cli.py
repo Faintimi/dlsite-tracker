@@ -44,7 +44,7 @@ from .importer import (
     years_label,
 )
 from .sales import BATCH_SIZE as SALES_BATCH_SIZE
-from .sales import fetch_product_info, save_sales
+from .sales import fetch_product_info, save_product_info
 from .serve import run_server
 from .store import Store
 
@@ -967,6 +967,13 @@ def cmd_sales(cfg: Config, args: argparse.Namespace) -> int:
                 mode = f"近 {stale_days} 天"
             else:
                 mode = "缺销量"
+        # 精确评分在同一个批量接口里；旧库自动补齐一次，不让用户额外操作。
+        missing_precise = store.works_missing_precise_rating()
+        if missing_precise:
+            worknos = list(dict.fromkeys([*worknos, *missing_precise]))
+            if args.limit is not None:
+                worknos = worknos[: args.limit]
+            mode += " + 精确评分补齐"
         total = len(worknos)
         if total == 0:
             note = f"{mode}：没有需要同步的作品"
@@ -975,24 +982,37 @@ def cmd_sales(cfg: Config, args: argparse.Namespace) -> int:
             return 0
         site = cfg.sites[0] if cfg.sites else "maniax"
         chunk = 400
-        done = updated = missing = 0
+        done = updated = missing = precise_updated = 0
         for start in range(0, total, chunk):
             part = worknos[start : start + chunk]
             infos = fetch_product_info(fetcher, site, part)
-            values = {
-                workno: (info["dl_count"], info["wishlist_count"])
-                for workno, info in infos.items()
-                if info["dl_count"] is not None or info["wishlist_count"] is not None
-            }
-            options = {
-                workno: info["options"] for workno, info in infos.items() if info["options"]
-            }
-            save_sales(store, site, values, options=options)
+            updated_part = save_product_info(store, site, infos, queried_worknos=part)
             done += len(part)
-            updated += len(values)
-            missing += len(part) - len(values)
-            print(f"[销量] {done}/{total}（更新 {updated} · 缺失 {missing}）", flush=True)
-        note = f"{mode} {total} 件：更新 {updated} · 缺失 {missing}"
+            updated += updated_part
+            missing += len(part) - updated_part
+            precise_updated += sum(
+                info["rating_precise"] is not None for info in infos.values()
+            )
+            print(
+                f"[销量] {done}/{total}（销量更新 {updated} · 精确评分 {precise_updated} "
+                f"· 缺失 {missing}）", flush=True,
+            )
+            if missing_precise and os.environ.get("DLST_PIPELINE_CHAIN") == "1":
+                state_file = cfg.out_dir / "update-progress.json"
+                try:
+                    current = json.loads(state_file.read_text(encoding="utf-8"))
+                    if current.get("phase") == "sales":
+                        write_task_progress(
+                            state_file, "sales",
+                            detail=f"正在补齐精确评分与销量：{done}/{total}",
+                            years=current.get("years"),
+                        )
+                except (OSError, ValueError):
+                    pass  # 进度文件不可读不影响已经成功写入的作品数据
+        note = (
+            f"{mode} {total} 件：销量更新 {updated} · 精确评分 {precise_updated} "
+            f"· 缺失 {missing}"
+        )
         store.finish_run(run_id, True, note)
         print(f"[销量] {note}")
         print(f"[请求统计] {fetcher.summary()}")
@@ -1017,6 +1037,11 @@ def cmd_task(cfg: Config, args: argparse.Namespace) -> int:
         return jobs.run_bootstrap(paths, python=python)
     if args.chain == "covers":
         return jobs.run_covers(paths, python=python)
+    if args.chain == "genre":
+        if not args.range:
+            print("task genre 需要分类 ID", file=sys.stderr)
+            return 2
+        return jobs.run_genre_import(paths, args.range, more=args.more, python=python)
     try:
         return jobs.run_update_all(paths, years=args.range or "1", python=python)
     except ValueError as exc:
@@ -1173,7 +1198,7 @@ def build_parser() -> argparse.ArgumentParser:
     task = sub.add_parser(
         "task", help="链式任务：bootstrap / daily / quick / update-all（跨平台；scripts/*.sh 的底层实现）"
     )
-    task.add_argument("chain", choices=["bootstrap", "daily", "quick", "covers", "update-all"], help="要执行的链")
+    task.add_argument("chain", choices=["bootstrap", "daily", "quick", "covers", "genre", "update-all"], help="要执行的链")
     task.add_argument(
         "range",
         nargs="?",
@@ -1181,6 +1206,7 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="1-30|all|since:YYYY|deeper:N",
         help="仅 update-all 使用（默认 1）",
     )
+    task.add_argument("--more", action="store_true", help="仅 task genre：从已导入深度后继续抓一页")
     return parser
 
 

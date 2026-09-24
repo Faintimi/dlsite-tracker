@@ -31,6 +31,8 @@ SCHEMA_STATEMENTS: List[str] = [
         timesale_price    INTEGER,
         timesale_end_date TEXT,
         rating_star       REAL,
+        rating_precise    REAL,
+        rating_precise_checked_at TEXT,
         rating_count      INTEGER,
         rank_day          INTEGER,
         rank_day_date     TEXT,
@@ -161,7 +163,7 @@ WORK_COLUMNS: List[str] = [
     "workno", "site", "product_name", "maker_id", "maker_name", "work_category",
     "work_type", "work_type_string", "age_category", "sex_category", "price",
     "official_price", "discount_rate", "is_timesale", "timesale_price",
-    "timesale_end_date", "rating_star", "rating_count", "rank_day",
+    "timesale_end_date", "rating_star", "rating_precise", "rating_count", "rank_day",
     "rank_day_date", "rank_week", "rank_week_date", "rank_month",
     "rank_month_date", "rank_day_current", "rank_week_current",
     "rank_month_current", "rank_trend_current", "rank_current_seen_at", "hot_seen_at",
@@ -198,7 +200,7 @@ class Store:
             self._ensure_columns()
 
     def _ensure_columns(self) -> None:
-        """旧库补列（幂等）：P5 榜位列、P16 options 徽章、P18 导入来源/遍历游标。"""
+        """旧库补列（幂等）：榜位、徽章、导入游标及精确评分。"""
         existing = {row[1] for row in self.conn.execute("PRAGMA table_info(works)")}
         for column, column_type in (
             ("rank_day_current", "INTEGER"),
@@ -209,6 +211,8 @@ class Store:
             ("hot_seen_at", "TEXT"),
             ("wishlist_count", "INTEGER"),
             ("options", "TEXT"),
+            ("rating_precise", "REAL"),
+            ("rating_precise_checked_at", "TEXT"),
         ):
             if column not in existing:
                 self.conn.execute(f"ALTER TABLE works ADD COLUMN {column} {column_type}")
@@ -784,6 +788,47 @@ class Store:
                     "UPDATE works SET options=?, updated_at=? WHERE workno=?",
                     (tokens, seen_at, workno),
                 )
+
+    def record_precise_ratings(
+        self,
+        site: str,
+        checked_worknos: Sequence[str],
+        ratings: Dict[str, float],
+        counts: Optional[Dict[str, int]] = None,
+    ) -> None:
+        """记录 info/ajax 的两位小数评分；无评分时只记已查询，不抹掉旧值。"""
+        if not checked_worknos:
+            return
+        now = _now()
+        with self.conn:
+            for workno in checked_worknos:
+                self.conn.execute(
+                    "INSERT OR IGNORE INTO works(workno,site,updated_at) VALUES(?,?,?)",
+                    (workno, site, now),
+                )
+                self.conn.execute(
+                    "UPDATE works SET rating_precise=COALESCE(?,rating_precise), "
+                    "rating_count=COALESCE(?,rating_count), "
+                    "rating_precise_checked_at=?, updated_at=? WHERE workno=?",
+                    (ratings.get(workno), (counts or {}).get(workno), now, now, workno),
+                )
+
+    def works_missing_precise_rating(self, limit: Optional[int] = None) -> List[str]:
+        """自动补齐旧库；仍无评分的作品最多每 30 天复查一次。"""
+        retry_before = (datetime.now().astimezone() - timedelta(days=30)).isoformat(
+            timespec="seconds"
+        )
+        sql = (
+            "SELECT workno FROM works WHERE enriched_at IS NOT NULL "
+            "AND rating_precise IS NULL "
+            "AND (rating_precise_checked_at IS NULL OR rating_precise_checked_at < ?) "
+            "ORDER BY workno"
+        )
+        args: List[Any] = [retry_before]
+        if limit is not None:
+            sql += " LIMIT ?"
+            args.append(int(limit))
+        return [row[0] for row in self.conn.execute(sql, args).fetchall()]
 
     def sales_deltas(self, window_days: int = 7) -> Dict[str, Dict[str, int]]:
         """窗口内销量增量（首尾快照差）：``{workno: {"delta": int, "days": int}}``。

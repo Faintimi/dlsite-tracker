@@ -16,6 +16,7 @@
     showRatingCount = true,
     rankText = null,
     oncats,
+    oncatmenu,
     onform,
     onbadge,
     onmaker,
@@ -27,6 +28,7 @@
     showRatingCount?: boolean;
     rankText?: string | null;
     oncats?: (name: string) => void;
+    oncatmenu?: (name: string, event: MouseEvent) => void;
     onform?: (name: string) => void;
     onbadge?: (key: "voice" | "music" | "video") => void;
     onmaker?: () => void;
@@ -61,7 +63,7 @@
     {#if categories.length > 0}
       <div class="labeled">
         <span class="label">分类</span>
-        <CategoryChips {categories} limit={8} ontap={oncats} />
+        <CategoryChips {categories} limit={8} ontap={oncats} onmenu={oncatmenu} />
       </div>
     {/if}
     {#if forms.length > 0}

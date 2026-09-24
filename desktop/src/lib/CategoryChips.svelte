@@ -6,11 +6,13 @@
     limit = 100,
     maxRows,
     ontap,
+    onmenu,
   }: {
     categories: string[];
     limit?: number;
     maxRows?: number;
     ontap?: (name: string) => void;
+    onmenu?: (name: string, event: MouseEvent) => void;
   } = $props();
 
   let container = $state<HTMLDivElement>();
@@ -69,8 +71,9 @@
     <TagChip
       kind="category"
       text={name}
-      title={ontap ? `点击筛选分类「${name}」（再点取消）` : ""}
+      title={onmenu ? "" : ontap ? `点击筛选分类「${name}」（再点取消）` : ""}
       onclick={ontap ? () => ontap(name) : undefined}
+      oncontextmenu={onmenu ? (event) => onmenu(name, event) : undefined}
     />
   {/each}
   {#if more > 0}<span class="more">+{more}</span>{/if}

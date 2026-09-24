@@ -9,6 +9,7 @@
     title = "",
     ariaLabel = "",
     onclick,
+    oncontextmenu,
   }: {
     kind: TagKind;
     text: string;
@@ -17,6 +18,7 @@
     title?: string;
     ariaLabel?: string;
     onclick?: () => void;
+    oncontextmenu?: (event: MouseEvent) => void;
   } = $props();
 
   const icon = $derived(flagTag(kind)?.icon ?? "");
@@ -28,12 +30,13 @@
   {#if removable}<span class="remove" aria-hidden="true">×</span>{/if}
 {/snippet}
 
-{#if onclick}
+{#if onclick || oncontextmenu}
   <button
     class="chip {kind} {context}"
     {title}
     aria-label={ariaLabel || undefined}
     onclick={onclick}
+    oncontextmenu={oncontextmenu}
   >{@render content()}</button>
 {:else}
   <span class="chip {kind} {context}" {title}>{@render content()}</span>

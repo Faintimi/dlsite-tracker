@@ -16,13 +16,38 @@ export function ratingText(game: WorkView, showCount = true): string {
   return base;
 }
 
-/** P21 评分星级分色：≤3.5 蓝、≤4.0 紫、≤4.5 粉、>4.5 亮金 #FFC700；未评分次级色 */
+/** 评分分色：≤3.5 蓝、≤4.0 紫、(4.0, 4.5] 橙红金、>4.5 亮金；未评分次级色。 */
 export function ratingColor(rating: number | null | undefined): string {
   if (typeof rating !== "number" || !Number.isFinite(rating)) return "var(--muted)";
   if (rating <= 3.5) return "#0a84ff";
   if (rating <= 4.0) return "#bf5af2";
-  if (rating <= 4.5) return "#ff375f";
+  if (rating <= 4.5) return "var(--rating-warm)";
   return "#ffc700";
+}
+
+/** 悬停详情：只呈现官方两位小数评分，不把旧半星值冒充精确分。 */
+export function preciseRatingText(game: WorkView): string {
+  const rating = game.rating_precise;
+  if (typeof rating !== "number" || !Number.isFinite(rating)) return "暂无精确评分";
+  const base = rating.toFixed(2);
+  if (typeof game.rating_count === "number" && game.rating_count > 0) {
+    return `${base}（${game.rating_count}）`;
+  }
+  return base;
+}
+
+/** 精确分 ≥4.70 顶档使用粉红色；其它精确值沿用评分梯度。 */
+export function preciseRatingColor(rating: number | null | undefined): string {
+  if (typeof rating !== "number" || !Number.isFinite(rating)) return "var(--muted)";
+  return rating >= 4.7 ? "#ff375f" : ratingColor(rating);
+}
+
+/** 卡片评分顶档：精确分 ≥4.70 仍显示 5，以粉红色区分普通金色 5 分档。 */
+export function cardRatingColor(game: WorkView): string {
+  if (typeof game.rating_precise === "number" && Number.isFinite(game.rating_precise) && game.rating_precise >= 4.7) {
+    return "#ff375f";
+  }
+  return ratingColor(game.rating);
 }
 
 /** 数据行省字：今年 MM-DD，跨年 YYYY-MM */

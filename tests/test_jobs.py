@@ -384,6 +384,95 @@ class CoversChainTests(unittest.TestCase):
             self.assertIn("封面补齐开始", log)
 
 
+class GenreChainTests(unittest.TestCase):
+    def test_import_runs_complete_chain_with_shared_lock(self) -> None:
+        calls: list = []
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = _paths(tmp)
+
+            def runner(log_file: Path, name: str, cli_args) -> int:
+                calls.append(list(cli_args))
+                self.assertIsNotNone(jobs.PipelineLock(paths.data_dir / "pipeline.lock").acquire())
+                return 0
+
+            self.assertEqual(jobs.run_genre_import(paths, "016", runner=runner), 0)
+            self.assertEqual(calls, [
+                ["fetch-genre", "016", "--worknos-out", str(paths.data_dir / "genre-worknos.txt")],
+                ["enrich", "--source", "genre-rank:maniax:016", "--limit", "800"],
+                ["images", "--worknos-file", str(paths.data_dir / "genre-worknos.txt"), "--limit", "600"],
+                ["export"],
+            ])
+            state = json.loads((paths.out_dir / "genre-progress.json").read_text(encoding="utf-8"))
+            self.assertEqual((state["genre_id"], state["phase"], state["done"]), ("016", "done", True))
+
+    def test_more_flag_and_fetch_failure_stop_before_enrich(self) -> None:
+        calls: list = []
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = _paths(tmp)
+
+            def runner(log_file: Path, name: str, cli_args) -> int:
+                calls.append(list(cli_args))
+                return 1
+
+            self.assertEqual(jobs.run_genre_import(paths, "016", more=True, runner=runner), 1)
+            self.assertEqual(calls[0][:3], ["fetch-genre", "016", "--more"])
+            self.assertEqual(len(calls), 1)
+            state = json.loads((paths.out_dir / "genre-progress.json").read_text(encoding="utf-8"))
+            self.assertEqual((state["phase"], state["done"]), ("failed", False))
+
+    def test_enrich_warning_still_exports(self) -> None:
+        calls: list = []
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = _paths(tmp)
+
+            def runner(log_file: Path, name: str, cli_args) -> int:
+                calls.append(cli_args[0])
+                return 1 if cli_args[0] == "enrich" else 0
+
+            self.assertEqual(jobs.run_genre_import(paths, "016", runner=runner), 0)
+            self.assertEqual(calls, ["fetch-genre", "enrich", "images", "export"])
+
+    def test_process_launch_error_is_reported_and_unlocks(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = _paths(tmp)
+
+            def runner(log_file: Path, name: str, cli_args) -> int:
+                raise OSError("launcher unavailable")
+
+            self.assertEqual(jobs.run_genre_import(paths, "016", runner=runner), 1)
+            state = json.loads((paths.out_dir / "genre-progress.json").read_text(encoding="utf-8"))
+            self.assertEqual((state["phase"], state["running"]), ("failed", False))
+            lock = jobs.PipelineLock(paths.data_dir / "pipeline.lock")
+            self.assertIsNone(lock.acquire())
+            lock.release()
+
+    def test_busy_job_does_not_start_another_import(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = _paths(tmp)
+            lock = jobs.PipelineLock(paths.data_dir / "pipeline.lock")
+            self.assertIsNone(lock.acquire())
+            try:
+                self.assertEqual(jobs.run_genre_import(paths, "016", runner=lambda *args: 0), 3)
+                state = json.loads((paths.out_dir / "genre-progress.json").read_text(encoding="utf-8"))
+                self.assertEqual(state["phase"], "busy")
+            finally:
+                lock.release()
+
+    def test_busy_attempt_preserves_running_genre_progress(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = _paths(tmp)
+            lock = jobs.PipelineLock(paths.data_dir / "pipeline.lock")
+            self.assertIsNone(lock.acquire())
+            state_file = paths.out_dir / "genre-progress.json"
+            jobs.write_genre_state(state_file, "016", "fetch", "抓取中", running=True)
+            try:
+                self.assertEqual(jobs.run_genre_import(paths, "046", runner=lambda *args: 0), 3)
+                state = json.loads(state_file.read_text(encoding="utf-8"))
+                self.assertEqual((state["genre_id"], state["phase"], state["running"]), ("016", "fetch", True))
+            finally:
+                lock.release()
+
+
 class UpdateAllTests(unittest.TestCase):
     def test_validation_errors(self) -> None:
         cases = (

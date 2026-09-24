@@ -32,7 +32,7 @@ SALES_DELTA_WINDOW_DAYS = 7  # 销量增量窗口（天）——「冲刺中」�
 # 导出/查询共用的列集合（供 export 与 serve 复用）
 WORK_SELECT = """
 SELECT w.workno, w.site, w.product_name, w.maker_name, w.maker_id, w.work_type, w.work_type_string,
-       w.price, w.rating_star, w.sales, w.official_price, w.discount_rate,
+       w.price, w.rating_star, w.rating_precise, w.sales, w.official_price, w.discount_rate,
        w.rating_count, w.rank_day, w.rank_week, w.rank_month,
        w.rank_day_date, w.rank_week_date, w.rank_month_date,
        w.rank_day_current, w.rank_week_current, w.rank_month_current,
@@ -45,7 +45,7 @@ FROM works w
 CSV_COLUMNS = [
     "id", "title", "maker", "category", "form", "sales",
     "sales_delta", "sales_delta_days", "wishlist_count",
-    "rating", "price",
+    "rating", "rating_precise", "price",
     "image_path", "url", "official_price", "discount_rate", "rating_count",
     "rank_day", "rank_week", "rank_month",
     "rank_day_date", "rank_week_date", "rank_month_date",
@@ -142,6 +142,7 @@ def build_record(
         "sales": row["sales"],
         "wishlist_count": row["wishlist_count"],
         "rating": row["rating_star"],
+        "rating_precise": row["rating_precise"],
         "price": row["price"],
         "image_path": cover_rel,
         "url": f"https://www.dlsite.com/{site}/work/=/product_id/{workno}.html",

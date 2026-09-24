@@ -60,6 +60,7 @@ class ExportTest(unittest.TestCase):
             "work_type_string": "模拟",
             "price": 1000,
             "rating_star": 4.5,
+            "rating_precise": 4.37,
             "sales": 123,
             "official_price": 1500,
             "discount_rate": 20,
@@ -87,6 +88,7 @@ class ExportTest(unittest.TestCase):
         self.assertEqual(record["category"], "A | B")
         self.assertEqual(record["form"], "模拟")
         self.assertEqual(record["rating"], 4.5)
+        self.assertEqual(record["rating_precise"], 4.37)
         self.assertEqual(record["sales"], 123)
         self.assertEqual(record["rank_day_date"], "2026-09-21")
         self.assertEqual(record["rank_day_current"], 5)
@@ -98,6 +100,7 @@ class ExportTest(unittest.TestCase):
         self.assertEqual(payload["schema_version"], 3)
         self.assertEqual(payload["count"], 1)
         self.assertEqual(payload["works"][0]["id"], "RJ1")
+        self.assertEqual(payload["works"][0]["rating_precise"], 4.37)
 
         csv_text = Path(paths["csv"]).read_text(encoding="utf-8")
         self.assertTrue(csv_text.startswith("\ufeff"))
@@ -106,6 +109,7 @@ class ExportTest(unittest.TestCase):
         self.assertIn("rank_day_current", csv_text.splitlines()[0])
         self.assertIn("rank_trend_current", csv_text.splitlines()[0])
         self.assertIn("RJ1", csv_text)
+        self.assertIn("rating_precise", csv_text.splitlines()[0])
 
     def test_discovery_signals(self):
         self._add_work("RJ9", wishlist_count=456)
@@ -152,6 +156,30 @@ class ExportTest(unittest.TestCase):
         )
         self.assertEqual(payload["trend"]["depth"], 42)
         self.assertEqual(payload["trend"]["seen_at"], "2026-09-22T12:00:00+08:00")
+
+    def test_removed_genre_disappears_after_export(self):
+        self._add_work("RJ1")
+        self.store.save_genre_info("016", "奇幻", 7190)
+        self.store.replace_genre_ranks("016", {"RJ1": 7})
+        self.store.save_genre_catalog([("016", "奇幻")])
+        cfg = types.SimpleNamespace(
+            out_dir=self.out,
+            default_work_types=["SLN"],
+            genre_rank_ids="",
+            sites=["maniax"],
+        )
+
+        export_current(cfg, self.store)
+        before = json.loads((self.out / "works.json").read_text(encoding="utf-8"))
+        self.assertEqual(before["genres"][0]["id"], "016")
+        self.assertEqual(before["works"][0]["genre_pos"], {"016": 7})
+
+        self.store.remove_genre("016")
+        export_current(cfg, self.store)
+        after = json.loads((self.out / "works.json").read_text(encoding="utf-8"))
+        self.assertEqual(after["genres"], [])
+        self.assertNotIn("genre_pos", after["works"][0])
+        self.assertEqual(after["genre_catalog"], [{"id": "016", "name": "奇幻"}])
 
     def test_work_type_filter_and_missing_cover(self):
         self._add_work("RJ1")

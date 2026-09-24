@@ -44,7 +44,7 @@ from .export import export_snapshot
 from .http import HttpError
 from .images import download_covers, download_entries, list_missing_covers
 from .progress import write_task_progress
-from .sales import fetch_product_info, save_sales
+from .sales import fetch_product_info, save_product_info
 from .store import Store
 
 LOG = logging.getLogger("dlsite_tracker.importer")
@@ -759,12 +759,7 @@ def run_import(
                     LOG.info("销量未达门槛，跳过：%s（dl_count=%s）", workno, dl_count)
                 else:
                     if workno in infos:
-                        save_sales(
-                            store,
-                            site,
-                            {workno: (dl_count, info.get("wishlist_count"))},
-                            options={workno: info["options"]} if info.get("options") else None,
-                        )
+                        save_product_info(store, site, {workno: info}, queried_worknos=[workno])
                     row = enrich_one(fetcher, store, cfg, workno, sources[workno])
                     if row is None:
                         session["failed"] += 1

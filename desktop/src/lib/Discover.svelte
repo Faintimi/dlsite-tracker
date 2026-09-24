@@ -13,7 +13,6 @@
   import DiscoverCard from "./DiscoverCard.svelte";
 
   let {
-    active = true,
     resetScrollToken = 0,
     works,
     tasteProfile,
@@ -27,7 +26,6 @@
     onseen,
     oncontext,
   }: {
-    active?: boolean;
     resetScrollToken?: number;
     works: WorkView[];
     tasteProfile: Record<string, TasteLevel>;
@@ -44,10 +42,6 @@
 
   const expanded = $state<Record<string, boolean>>({});
   let discoverEl: HTMLDivElement | null = $state(null);
-  let savedScrollTop = 0;
-  $effect(() => {
-    if (active && discoverEl) discoverEl.scrollTop = savedScrollTop;
-  });
   // 首屏铺满：每区显示数＝网格列数 ×2 行，避免末行留下空位（随窗口宽度自适应）。
   // 网格宽 = 发现页宽 − 页面内边距 36（18×2）− 分区内边距 28（14×2）。
   let discoverW = $state(0);
@@ -78,7 +72,6 @@
     if (sig !== oldSig) {
       if (oldSig) {
         for (const key of Object.keys(expanded)) delete expanded[key];
-        savedScrollTop = 0;
         discoverEl?.scrollTo({ top: 0 });
       }
       oldSig = sig;
@@ -93,7 +86,6 @@
   });
   $effect(() => {
     void resetScrollToken;
-    savedScrollTop = 0;
     discoverEl?.scrollTo({ top: 0 });
   });
   const oldTotal = $derived(Math.max(1, Math.ceil(oldOrder.length / previewCount)));
@@ -161,13 +153,7 @@
   }
 </script>
 
-<div
-  class="discover"
-  class:inactive={!active}
-  bind:this={discoverEl}
-  bind:clientWidth={discoverW}
-  onscroll={(event) => { if (active) savedScrollTop = event.currentTarget.scrollTop; }}
->
+<div class="discover" bind:this={discoverEl} bind:clientWidth={discoverW}>
   <div class="d-head">
     <span class="d-head-icon">{@html ICONS.flame}</span>
     <div class="d-head-text">
@@ -257,7 +243,6 @@
     flex-direction: column;
     gap: 14px;
   }
-  .discover.inactive { display: none; }
 
   .d-head {
     display: flex;

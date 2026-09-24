@@ -469,6 +469,87 @@ def run_covers(
     )
 
 
+def write_genre_state(
+    state_file: Path, genre: str, phase: str, detail: str,
+    *, running: bool, done: bool = False, error: str = "", more: bool = False,
+) -> None:
+    """分类任务专用进度；与原 macOS 脚本的字段契约一致。"""
+    state_file.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "schema_version": 1,
+        "genre_id": genre,
+        "genre_name": "",
+        "phase": phase,
+        "detail": detail,
+        "running": running,
+        "done": done,
+        "error": error,
+        "more": more,
+        "pid": os.getpid(),
+        "updated_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+        "updated_ts": time.time(),
+    }
+    temporary = state_file.with_name(f"{state_file.name}.{os.getpid()}.tmp")
+    temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    os.replace(temporary, state_file)
+
+
+def run_genre_import(
+    paths: JobPaths, genre: str, *, more: bool = False,
+    python: Optional[str] = None, runner: Optional[StepRunner] = None,
+) -> int:
+    """跨平台分类导入：抓榜 → 定向富化 → 封面 → 导出，整条链独占管道。"""
+    genre = genre.strip()
+    if not genre:
+        return 2
+    log_file = paths.data_dir / "genre.log"
+    state_file = paths.out_dir / "genre-progress.json"
+    lock = PipelineLock(paths.data_dir / "pipeline.lock")
+    if lock.acquire() is not None:
+        # 已有分类任务时保留其进度，不让第二次点击把正在运行的状态覆盖成 busy。
+        try:
+            current = json.loads(state_file.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            current = {}
+        if not current.get("running"):
+            write_genre_state(state_file, genre, "busy", "已有数据任务在运行；请稍后再试", running=False, more=more)
+        return 3
+    run = runner or _make_runner(python or _default_python(), paths.config_path)
+    worknos = paths.data_dir / "genre-worknos.txt"
+    source = f"genre-rank:maniax:{genre}"
+    try:
+        _append(log_file, f"===== {_timestamp()} 分类人气开始（{genre}） =====")
+        steps: Sequence[Tuple[str, str, str, Sequence[str], bool]] = (
+            ("fetch", "正在抓取分类人气榜", "fetch-genre（分类人气）",
+             ("fetch-genre", genre, *(("--more",) if more else ()), "--worknos-out", str(worknos)), True),
+            ("enrich", "正在导入榜上新作品", "enrich（定向富化）",
+             ("enrich", "--source", source, "--limit", "800"), False),
+            ("images", "正在补齐新作品封面", "images（定向封面）",
+             ("images", "--worknos-file", str(worknos), "--limit", "600"), False),
+            ("export", "正在导出数据", "export（导出）", ("export",), True),
+        )
+        for phase, detail, name, args, required in steps:
+            write_genre_state(state_file, genre, phase, detail, running=True, more=more)
+            code = run(log_file, name, args)
+            if code != 0 and required:
+                message = f"{name} 失败（退出码 {code}）；详见 data/genre.log"
+                write_genre_state(state_file, genre, "failed", message, running=False, error=message, more=more)
+                return 1
+        write_genre_state(state_file, genre, "done", "分类人气榜已更新", running=False, done=True, more=more)
+        _append(log_file, f"===== {_timestamp()} 分类人气完成（{genre}） =====")
+        return 0
+    except KeyboardInterrupt:
+        write_genre_state(state_file, genre, "failed", "分类导入已中断", running=False, error="已中断", more=more)
+        return 130
+    except OSError as exc:
+        message = f"分类任务无法执行：{exc}"
+        _append(log_file, f"[error] {message}")
+        write_genre_state(state_file, genre, "failed", message, running=False, error=message, more=more)
+        return 1
+    finally:
+        lock.release()
+
+
 _USAGE = "用法：python3 -m dlsite_tracker task update-all [1-30|all|since:YYYY|deeper:N]"
 
 

@@ -10,7 +10,7 @@ import logging
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from .http import Fetcher, HttpError
-from .sales import parse_options, sync_sales
+from .sales import parse_options, parse_precise_rating, sync_sales
 from .store import Store
 
 LOG = logging.getLogger("dlsite_tracker.enrich")
@@ -137,6 +137,9 @@ def parse_product(
         "genres_json": json.dumps(genres, ensure_ascii=False),
         "image_url": image or None,
     }
+    precise_rating = parse_precise_rating(picked.get("rate_average_2dp"))
+    if precise_rating is not None:
+        row["rating_precise"] = precise_rating
     if options:
         row["options"] = options
     return row, genres

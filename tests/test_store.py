@@ -424,6 +424,22 @@ class StoreTest(unittest.TestCase):
         job = self.store.get_import_job()
         self.assertEqual((job["source"], job["walk_done"], job["cursor_page"]), ("numbers", 0, 0))
 
+    def test_old_works_table_adds_precise_rating_columns(self):
+        import sqlite3 as _sqlite3
+        path = Path(self._tmp.name) / "old-works.sqlite"
+        conn = _sqlite3.connect(str(path))
+        conn.execute("CREATE TABLE works (workno TEXT PRIMARY KEY, rating_star REAL)")
+        conn.commit()
+        conn.close()
+        store = Store(path)
+        try:
+            store.migrate()
+            store.migrate()
+            columns = {row[1] for row in store.conn.execute("PRAGMA table_info(works)")}
+            self.assertLessEqual({"rating_precise", "rating_precise_checked_at"}, columns)
+        finally:
+            store.close()
+
     def test_import_job_migration_adds_catalog_columns(self):
         """旧库（无 P18 列）经 migrate 自动补列，且能写入目录任务。"""
         import sqlite3 as _sqlite3

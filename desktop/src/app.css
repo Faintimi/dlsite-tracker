@@ -7,6 +7,7 @@
   --muted: #6b6b74;
   --border: #e2e2e8;
   --accent: #d94f2b;
+  --rating-warm: #c8541d;
   --form-chip: #007aff;
   --voice-chip: #d42e70;
   --music-chip: #734ad9;
@@ -23,6 +24,7 @@
     --muted: #9a9aa4;
     --border: #37373f;
     --accent: #ff7a59;
+    --rating-warm: #ff8c53;
     --codebg: #2e2e36;
     --coverbg: #2a2a31;
   }

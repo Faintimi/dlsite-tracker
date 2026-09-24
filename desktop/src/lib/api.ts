@@ -11,6 +11,7 @@ export interface Work {
   form: string;
   sales: number | null;
   rating: number | null;
+  rating_precise?: number | null;
   price: number | null;
   image_path: string;
   url: string;

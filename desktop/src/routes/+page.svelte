@@ -34,6 +34,7 @@
   import TasteEditor from "$lib/TasteEditor.svelte";
   import TagChip from "$lib/TagChip.svelte";
   import { CONTENT_FLAG_TAGS } from "$lib/tag";
+  import { matchingGenreCandidates } from "$lib/genreCatalog";
   import { DEFAULT_COLLECTION_NAME, library } from "$lib/library.svelte";
   import { prefs } from "$lib/prefs.svelte";
   import { ICONS, categoriesOf } from "$lib/ui";
@@ -160,7 +161,6 @@
   /** 主区模式：浏览（列表）/ 发现（口味匹配与黑马信号） */
   let mode = $state<"browse" | "discover" | "followUpdates">("browse");
   let discoverReturnMode = $state<"browse" | "followUpdates">("browse");
-  let discoverVisited = $state(false);
   let followUpdatesVisited = $state(false);
   let returnToFollowUpdates = $state(false);
   let manualRefreshCount = $state(0);
@@ -198,7 +198,11 @@
   // 对话框：收藏夹 / 分类导入 / 加入每日刷新 / 年份选择
   let collectionPrompt = $state<{ workId: string } | null>(null);
   let collectionName = $state("");
-  let genreImportRequest = $state<{ id: string; name: string } | null>(null);
+  let genreImportRequest = $state<{ id: string; name: string; source?: "chip" } | null>(null);
+  let pendingCategoryImport = $state<{ id: string; name: string } | null>(null);
+  let categoryImportReady = $state<{ id: string; name: string } | null>(null);
+  let categoryMenu = $state<{ name: string; x: number; y: number; selectedId?: string } | null>(null);
+  let genrePreferenceSaving = $state(false);
   let joinDailyRequest = $state<{ id: string; name: string } | null>(null);
   let yearDialog = $state<{ mode: "update" | "deeper" } | null>(null);
   let yearValue = $state(new Date().getFullYear() - 5);
@@ -463,6 +467,57 @@
 
   const genreJobActive = $derived(genreInfo?.running === true);
   const pipelineBusy = $derived(initializing || updateStarting || isRunning(progress) || genreJobActive);
+  const categoryImportBusy = $derived(pipelineBusy || syncing || importInfo?.running === true || pendingCategoryImport !== null || genrePreferenceSaving);
+  const categoryMenuItems = $derived.by(() => {
+    const menu = categoryMenu;
+    if (!menu) return [];
+    const candidates = matchingGenreCandidates(menu.name, genreCatalog, genres);
+    const items: { label: string; action: () => void; disabled?: boolean; divider?: boolean }[] = [];
+    if (candidates.length === 0) {
+      return [{ label: "官方人气榜目录未找到此分类", action: () => {}, disabled: true }];
+    }
+    if (candidates.length > 1 && !menu.selectedId) {
+      items.push({ label: "请选择对应的官方分类 ID", action: () => {}, disabled: true });
+      for (const candidate of candidates) {
+        items.push({
+          label: `${candidate.name}（ID ${candidate.id}）`,
+          action: () => { categoryMenu = { ...menu, selectedId: candidate.id }; },
+        });
+      }
+      return items;
+    }
+    const candidate = candidates.find((entry) => entry.id === menu.selectedId) ?? candidates[0];
+    const imported = genres.find((entry) => entry.id === candidate.id && (entry.depth ?? 0) > 0);
+    if (imported) {
+      items.push({
+        label: `查看「${candidate.name}」人气榜`,
+        action: () => { filter.genreFocus = candidate.id; categoryImportReady = null; },
+      });
+      items.push({
+        label: imported.watched ? "取消每日刷新" : "加入每日刷新",
+        action: () => void (imported.watched ? handleGenreUnwatch(candidate.id) : handleGenreWatch(candidate.id)),
+        disabled: categoryImportBusy,
+      });
+    } else {
+      items.push({
+        label: `导入「${candidate.name}」人气榜（前 200 名）…`,
+        action: () => { genreImportRequest = { ...candidate, source: "chip" }; },
+        disabled: categoryImportBusy,
+      });
+    }
+    if (categoryImportBusy) {
+      items.push({ label: "当前有任务进行中，请完成后再试", action: () => {}, disabled: true, divider: true });
+    }
+    return items;
+  });
+
+  function openCategoryMenu(name: string, event: MouseEvent) {
+    event.preventDefault();
+    event.stopPropagation();
+    hideHover();
+    cardMenu = null;
+    categoryMenu = { name, x: event.clientX, y: event.clientY };
+  }
 
   // 旧版首次初始化可能遗留“作品已富化但封面阶段从未启动”的全空状态。
   // 新版启动后自动修复一次；这是数据管道不变量，不向用户暴露补救按钮。
@@ -660,6 +715,7 @@
     scrollTop = (event.currentTarget as HTMLDivElement).scrollTop;
     hideHover();
     cardMenu = null;
+    categoryMenu = null;
   }
 
   function openWork(url: string) {
@@ -670,6 +726,7 @@
     event.preventDefault();
     event.stopPropagation();
     hideHover();
+    categoryMenu = null;
     cardMenu = { x: event.clientX, y: event.clientY, work, discovery: false };
   }
 
@@ -802,12 +859,31 @@
       }
       importInfo = imported;
       const genre = next.genreProgress;
+      if (
+        pendingCategoryImport?.id === genre?.genre_id &&
+        (genre?.phase === "failed" || genre?.phase === "busy")
+      ) {
+        pendingCategoryImport = null;
+        updateError = genre.detail || genre.error || "分类人气榜导入未完成";
+      }
       if (genre && genre.done && !isStale(genre.updated_ts, 6) && (genre.updated_ts ?? 0) !== lastGenreDoneTs) {
         if (lastGenreDoneTs !== 0 || genreInfo !== null) {
-          void reload({ keepScroll: true }); // 分类抓取完成 → 自动刷新
+          const refreshed = reload({ keepScroll: true }); // 分类抓取完成 → 自动刷新
           const id = genre.genre_id ?? "";
-          const name = genre.genre_name ?? genreNameById(id);
-          if (id) joinDailyRequest = { id, name };
+          const name = pendingCategoryImport?.name || genre.genre_name || genreNameById(id);
+          if (pendingCategoryImport?.id === id) {
+            pendingCategoryImport = null;
+            if (genre.error) updateError = genre.error;
+            else void refreshed.then(() => {
+              if (data?.file.genres?.some((entry) => entry.id === id && (entry.depth ?? 0) > 0)) {
+                categoryImportReady = { id, name };
+              } else {
+                updateError = `「${name}」导入已结束，但新榜单尚未出现在数据文件中；请稍后点「更新」重读`;
+              }
+            });
+          } else if (id && !genre.error) {
+            joinDailyRequest = { id, name };
+          }
         }
         lastGenreDoneTs = genre.updated_ts ?? 0;
       } else if (genre?.done) {
@@ -821,7 +897,7 @@
   }
 
   function genreNameById(id: string): string {
-    return genres.find((entry) => entry.id === id)?.name ?? id;
+    return genres.find((entry) => entry.id === id)?.name ?? genreCatalog.find((entry) => entry.id === id)?.name ?? id;
   }
 
   async function runUpdate(kind: "quick" | "daily" | "covers" | "update-all", range?: string) {
@@ -960,12 +1036,23 @@
     genreImportRequest = { id, name };
   }
 
-  async function confirmGenreImport(id: string) {
+  async function confirmGenreImport() {
+    const request = genreImportRequest;
     genreImportRequest = null;
+    if (!request) return;
+    if (request.source === "chip" && (pipelineBusy || syncing || importInfo?.running || genrePreferenceSaving)) {
+      updateError = "当前有任务进行中，请完成后再导入分类人气榜";
+      return;
+    }
+    if (request.source === "chip") {
+      pendingCategoryImport = { id: request.id, name: request.name };
+      categoryImportReady = null;
+    }
     try {
-      await startGenreImport(id, false);
+      await startGenreImport(request.id, false);
       await pollProgress();
     } catch (error) {
+      if (request.source === "chip") pendingCategoryImport = null;
       window.alert(String(error));
     }
   }
@@ -981,30 +1068,48 @@
   }
 
   /** 加入每日刷新 → 导出 + 重载（侧栏「每日刷新」计数随之更新）。 */
-  async function handleGenreWatch(id: string) {
+  async function setGenreWatched(id: string, watched: boolean) {
+    if (genrePreferenceSaving) return;
+    genrePreferenceSaving = true;
     try {
-      await watchGenre(id);
-      await refreshData();
+      if (watched) await watchGenre(id);
+      else await unwatchGenre(id);
+      await runExport();
+      await reload({ quiet: true, keepScroll: true });
     } catch (error) {
       updateError = String(error);
+    } finally {
+      genrePreferenceSaving = false;
     }
+  }
+
+  async function handleGenreWatch(id: string) {
+    await setGenreWatched(id, true);
   }
 
   async function handleGenreUnwatch(id: string) {
-    try {
-      await unwatchGenre(id);
-      await refreshData();
-    } catch (error) {
-      updateError = String(error);
-    }
+    await setGenreWatched(id, false);
   }
 
   async function handleGenreRemove(id: string) {
+    if (genrePreferenceSaving || syncing || pipelineBusy || importInfo?.running) {
+      updateError = "当前有任务进行中，请完成后再移除分类人气榜";
+      return;
+    }
+    genrePreferenceSaving = true;
+    let removed = false;
     try {
       await removeGenre(id);
-      await refreshData();
+      removed = true;
+      await runExport();
+      if (filter.genreFocus === id) filter.genreFocus = "";
+      await reload({ keepScroll: true });
     } catch (error) {
-      updateError = String(error);
+      updateError = removed
+        ? `分类已从本地库移除，但界面同步失败：${String(error)}。请点击「更新」重试。`
+        : String(error);
+    } finally {
+      genrePreferenceSaving = false;
     }
   }
 
@@ -1025,7 +1130,6 @@
       else mode = "browse";
     } else {
       discoverReturnMode = mode;
-      discoverVisited = true;
       mode = "discover";
     }
   }
@@ -1133,7 +1237,7 @@
           title="发现：黑马新锐 / 合口味新作 / 遗珠（本地计算，点口味即时生效）"
           onclick={toggleDiscover}
         >
-          {@html ICONS.flame}{mode === "discover" ? (discoverReturnMode === "followUpdates" ? "返回关注更新" : "返回浏览") : "发现"}
+          {@html ICONS.flame}{mode === "discover" ? "返回浏览" : "发现"}
         </button>
         <button
           class="btn with-icon personalization-trigger"
@@ -1203,9 +1307,20 @@
       </button>
     {/if}
 
-    {#if discoverVisited && status === "ready" && data}
+    {#if categoryImportReady && mode === "browse"}
+      <div class="category-ready" role="status">
+        <span>「{categoryImportReady.name}」人气榜已导入</span>
+        <span class="spacer"></span>
+        <button class="link" onclick={() => {
+          filter.genreFocus = categoryImportReady?.id ?? "";
+          categoryImportReady = null;
+        }}>查看榜单</button>
+        <button class="link" aria-label="关闭导入完成提示" onclick={() => (categoryImportReady = null)}>×</button>
+      </div>
+    {/if}
+
+    {#if mode === "discover" && status === "ready" && data}
       <Discover
-        active={mode === "discover"}
         resetScrollToken={manualRefreshCount}
         works={data.works}
         tasteProfile={prefs.data.tasteProfile}
@@ -1415,6 +1530,7 @@
                       showRatingCount={prefs.data.showRatingCount}
                       rankText={rankTextFor(w)}
                       oncats={chipCategory}
+                      oncatmenu={openCategoryMenu}
                       onform={chipForm}
                       onbadge={chipBadge}
                       onmaker={() => showMaker(w)}
@@ -1441,6 +1557,7 @@
                       showRatingCount={prefs.data.showRatingCount}
                       rankText={rankTextFor(w)}
                       oncats={chipCategory}
+                      oncatmenu={openCategoryMenu}
                       onform={chipForm}
                       onbadge={chipBadge}
                       onmaker={() => showMaker(w)}
@@ -1554,6 +1671,10 @@
   <ContextMenu x={cardMenu.x} y={cardMenu.y} items={menuItems} onclose={() => (cardMenu = null)} />
 {/if}
 
+{#if categoryMenu}
+  <ContextMenu x={categoryMenu.x} y={categoryMenu.y} items={categoryMenuItems} onclose={() => (categoryMenu = null)} />
+{/if}
+
 {#if dislikeRequest}
   <DiscoveryFeedbackDialog
     title={dislikeRequest.title}
@@ -1599,7 +1720,7 @@
     message={`「${genreImportRequest.name}」尚未导入人气数据。现在抓取并入库？（含榜上新作品，约 1–3 分钟；进度见顶部横幅）`}
     confirmLabel="开始导入（前 200 名）"
     danger={false}
-    onconfirm={() => void confirmGenreImport(genreImportRequest?.id ?? "")}
+    onconfirm={() => void confirmGenreImport()}
     oncancel={() => (genreImportRequest = null)}
   />
 {/if}
@@ -1816,6 +1937,18 @@
 
   .banner-wrap {
     border-bottom: 1px solid var(--border);
+  }
+
+  .category-ready {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex: none;
+    padding: 8px 22px;
+    border-bottom: 1px solid var(--border);
+    background: color-mix(in srgb, var(--accent) 8%, var(--panel));
+    color: var(--text);
+    font-size: 12px;
   }
 
   .follow-banner {

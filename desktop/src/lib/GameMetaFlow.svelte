@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { WorkView } from "$lib/api";
-  import { ICONS, compactDateText, fmtNum, heatText, ratingColor, ratingText } from "$lib/ui";
+  import { ICONS, cardRatingColor, compactDateText, fmtNum, heatText, ratingText } from "$lib/ui";
 
   let {
     game,
@@ -20,7 +20,7 @@
       key: "rating",
       icon: ICONS.star,
       text: ratingText(game, showRatingCount),
-      color: ratingColor(game.rating),
+      color: cardRatingColor(game),
     });
     if (game.regist_date) {
       list.push({ key: "date", icon: ICONS.calendar, text: compactDateText(game.regist_date) });

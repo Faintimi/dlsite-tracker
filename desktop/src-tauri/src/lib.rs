@@ -564,7 +564,7 @@ fn cancel_import(app: AppHandle) -> Result<String, String> {
 fn start_genre_import(app: AppHandle, genre: String, more: bool) -> Result<String, String> {
     let project_dir = project_dir_of(&app)?;
     if let Some((sidecar, dir)) = embedded_target(&project_dir) {
-        let mut args: Vec<&str> = vec!["fetch-genre", &genre];
+        let mut args: Vec<&str> = vec!["task", "genre", &genre];
         if more {
             args.push("--more");
         }
@@ -573,7 +573,7 @@ fn start_genre_import(app: AppHandle, genre: String, more: bool) -> Result<Strin
     }
     #[cfg(windows)]
     {
-        let mut args: Vec<&str> = vec!["-m", "dlsite_tracker", "fetch-genre", &genre];
+        let mut args: Vec<&str> = vec!["-m", "dlsite_tracker", "task", "genre", &genre];
         if more {
             args.push("--more");
         }
@@ -599,38 +599,7 @@ fn start_genre_import(app: AppHandle, genre: String, more: bool) -> Result<Strin
 /// 把分类加入每日刷新列表（写入配置 genre_rank_ids）。
 #[tauri::command]
 fn watch_genre(app: AppHandle, genre: String) -> Result<String, String> {
-    let project_dir = project_dir_of(&app)?;
-    if let Some((sidecar, dir)) = embedded_target(&project_dir) {
-        spawn_command(embedded_command(&sidecar, &dir, &["watch-genre", &genre])?)?;
-        return Ok(format!("已加入每日刷新：{genre}"));
-    }
-    #[cfg(windows)]
-    {
-        spawn_python(
-            &project_dir,
-            &["-m", "dlsite_tracker", "watch-genre", &genre],
-        )?;
-        Ok(format!("已加入每日刷新：{genre}"))
-    }
-    #[cfg(not(windows))]
-    {
-        let script = project_dir.join("scripts").join("genre-import.sh");
-        if !script.is_file() {
-            return Err(format!("未找到分类抓取脚本：{}", script.display()));
-        }
-        let status = Command::new("/bin/bash")
-            .arg(script)
-            .arg("watch")
-            .arg(&genre)
-            .current_dir(&project_dir)
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
-        match status {
-            Ok(_) => Ok(format!("已加入每日刷新：{genre}")),
-            Err(e) => Err(format!("加入每日刷新失败：{e}")),
-        }
-    }
+    genre_admin(&app, "watch", &genre)
 }
 
 /// 启动管道任务（quick / daily / update-all[range]）。
@@ -747,6 +716,7 @@ async fn run_export(app: AppHandle) -> Result<String, String> {
 fn genre_admin(app: &AppHandle, action: &str, genre: &str) -> Result<String, String> {
     let project_dir = project_dir_of(app)?;
     let cli = match action {
+        "watch" => "watch-genre",
         "unwatch" => "unwatch-genre",
         "remove" => "remove-genre",
         _ => return Err(format!("未知分类操作：{action}")),

@@ -16,6 +16,7 @@
     showRatingCount = true,
     rankText = null,
     oncats,
+    oncatmenu,
     onform,
     onbadge,
     onmaker,
@@ -27,6 +28,7 @@
     showRatingCount?: boolean;
     rankText?: string | null;
     oncats?: (name: string) => void;
+    oncatmenu?: (name: string, event: MouseEvent) => void;
     onform?: (name: string) => void;
     onbadge?: (key: "voice" | "music" | "video") => void;
     onmaker?: () => void;
@@ -53,7 +55,7 @@
       >{game.maker || "制作者未知"}</button>
       <div class="category-slot">
         {#if categories.length > 0}
-          <CategoryChips {categories} limit={5} maxRows={2} ontap={oncats} />
+          <CategoryChips {categories} limit={5} maxRows={2} ontap={oncats} onmenu={oncatmenu} />
         {/if}
       </div>
       <div class="form-slot">

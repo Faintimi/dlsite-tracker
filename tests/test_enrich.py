@@ -83,6 +83,12 @@ class ParseProductTest(unittest.TestCase):
         self.assertIsNone(row["rating_star"])
         self.assertIsNone(row["rating_count"])
 
+    def test_precise_rating_when_product_json_provides_it(self):
+        item = dict(ITEM, rate_average_2dp=4.83)
+        row, _ = parse_product([item], "RJ12345678")  # type: ignore[misc]
+        self.assertEqual(row["rating_star"], 5.0)
+        self.assertEqual(row["rating_precise"], 4.83)
+
     def test_empty_payload(self):
         self.assertIsNone(parse_product([], "RJ1"))
         self.assertIsNone(parse_product(None, "RJ1"))
