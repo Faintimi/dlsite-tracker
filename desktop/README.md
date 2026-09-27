@@ -57,3 +57,5 @@ npm run check        # svelte-check 类型检查
 - **内嵌模式**（打包版 / 普通用户）：应用随包携带 `radar-pipeline` 单文件管道（PyInstaller 构建，见 `scripts/build-sidecar.sh`）。首次使用在空状态页点「初始化数据」，自动在应用数据目录完成配置、建库、热榜富化、封面补齐与最终导出（约 5–10 分钟，视网络）；之后所有更新链都会自行补齐新增作品封面，并自动修复旧版本遗留的零封面状态——**无需安装 Python、无需克隆仓库，Windows 不会额外弹出命令行窗口**。
 
 首次启动时应用会**自动查找并绑定**数据文件：沿可执行文件所在目录向上查找、扫描 `~/code`、`~/Code`、`~/Projects`、`~/Documents`、`~/Desktop` 与主目录下的一层子目录（找 `<项目>/out/works.json`），以及内嵌模式的应用数据目录（`<应用数据目录>/pipeline/out/works.json`）；找到后记住路径，下次直接使用。仅在自动查找失败时，才需要在空状态页手动选择一次。
+
+**复用已备份的数据（Windows）**：安装目录只放主程序与内嵌管道，不包含会不断增长的作品库。退出应用后，先备份目标目录，再将备份中的 `config.ini`、`data/`、`out/` 解压到 `%APPDATA%\com.faintimi.doujin-radar\pipeline\`，保留 `data/dlsite.sqlite`、`out/works.json`、`out/covers/` 的相对位置；新安装或仍指向默认数据目录的应用会在重启后读取它。不要复制 macOS 备份中的 `application-support/.../settings.json`，其中记录的是 Mac 绝对路径。只想离线浏览时，单独保留 `out/works.json` 和 `out/covers/` 即可；要接续更新则还需要数据库与配置文件。
