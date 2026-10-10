@@ -8,8 +8,9 @@ DLsite remains the source for product information and purchases. Radar organizes
 
 ## Download
 
-- **Windows**: grab `doujin-game-radar-windows-installer` from the latest ["Desktop Build (Windows)"](https://github.com/Faintimi/dlsite-tracker/actions/workflows/desktop-release.yml) run (or the Release page)
-- **macOS / build it yourself**: run `bash scripts/build-sidecar.sh` at the repository root first (builds the embedded pipeline), then `npm install && npm run tauri build` (requirements below)
+- **Windows**: download the `.exe` installer from Releases; the Windows Actions artifact is also available for testing
+- **macOS**: download the `.dmg` from Releases, open it, and drag the app to Applications. The app is ad-hoc signed but not Apple-notarized; if macOS blocks the first launch, allow it in System Settings → Privacy & Security. An Actions artifact has an additional ZIP wrapper and is not itself an installer
+- **Build it yourself**: run `bash scripts/build-sidecar.sh` at the repository root first (builds the embedded pipeline), then `npm install && npm run tauri build` from `desktop` (requirements below)
 
 ## Features
 

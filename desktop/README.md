@@ -8,8 +8,9 @@ DLsite 提供作品信息与购买入口；雷达把公开商品数据组织成�
 
 ## 获取
 
-- **Windows**：GitHub → Actions → 「Desktop Build (Windows)」最近一次运行的 Artifacts（`doujin-game-radar-windows-installer`）下载安装包；或见 Release 页附件
-- **macOS / 自行构建**：在仓库根执行 `bash scripts/build-sidecar.sh`（生成内嵌管道），再 `npm install && npm run tauri build`（依赖见下表）
+- **Windows**：从 GitHub Release 页下载 `.exe` 安装包；Actions 的 Windows Artifact 也可用于测试
+- **macOS**：从 GitHub Release 页下载 `.dmg` 安装盘，打开后把应用拖入「应用程序」。目前采用临时签名，未获 Apple 公证；首次启动若被拦截，在「系统设置 → 隐私与安全性」中选择仍要打开。Actions Artifact 是构建产物 ZIP，不是直接打开的安装盘
+- **自行构建**：在仓库根执行 `bash scripts/build-sidecar.sh`（生成内嵌管道），再进入 `desktop` 执行 `npm install && npm run tauri build`（依赖见下表）
 
 ## 功能
 

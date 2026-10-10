@@ -30,7 +30,7 @@ DLsite 是作品信息与购买的来源；雷达补充的是跨作品、跨时�
 
 ## 先体验桌面版
 
-Windows / macOS 打包版内置数据管道，**使用时不需要 Python，也不需要克隆仓库**。从 [Release](https://github.com/Faintimi/dlsite-tracker/releases) 下载对应版本，首次打开点「初始化数据」即可开始；更新过程会逐步显示已导入作品，封面随后补齐。也可从 [Actions 构建产物](https://github.com/Faintimi/dlsite-tracker/actions/workflows/desktop-release.yml) 获取构建。上方功能介绍对应当前源码，已发布安装包的功能以各版本说明为准。具体操作见 [桌面版说明](desktop/README.md)。
+Windows / macOS 打包版内置数据管道，**使用时不需要 Python，也不需要克隆仓库**。从 [Release](https://github.com/Faintimi/dlsite-tracker/releases) 下载对应版本（Windows `.exe`；macOS `.dmg`），首次打开点「初始化数据」即可开始；更新过程会逐步显示已导入作品，封面随后补齐。[Actions 构建产物](https://github.com/Faintimi/dlsite-tracker/actions/workflows/desktop-release.yml) 外层还会有一层 Artifact ZIP，不宜当作安装盘直接打开。上方功能介绍对应当前源码，已发布安装包的功能以各版本说明为准。具体操作见 [桌面版说明](desktop/README.md)。
 
 ## 命令行 / 开发者快速开始
 

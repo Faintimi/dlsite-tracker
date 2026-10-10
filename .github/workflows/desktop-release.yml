@@ -1,4 +1,4 @@
-# 桌面版打包（Windows NSIS + macOS .app）：产出安装包 / 应用包，供下载与验收测试。
+# 桌面版打包（Windows NSIS + macOS DMG）：产出安装包，供下载与验收测试。
 # 触发：手动触发 / 推送 desktop/** 到 main（仅上传产物）/ 推送 desktop-v* 标签（同时附加到 Release）。
 name: Desktop Build (Windows / macOS)
 
@@ -104,8 +104,34 @@ jobs:
         working-directory: ${{ github.workspace }}
         run: bash scripts/build-sidecar.sh
 
-      - name: Build app bundle
+      - name: Build signed app
+        env:
+          APPLE_SIGNING_IDENTITY: "-"
         run: npm run tauri build -- --bundles app
+
+      - name: Package installer disk image
+        shell: bash
+        run: |
+          set -euo pipefail
+          stage="$(mktemp -d)"
+          trap 'rm -rf "$stage"' EXIT
+          ditto "src-tauri/target/release/bundle/macos/Doujin Game Radar.app" "$stage/Doujin Game Radar.app"
+          ln -s /Applications "$stage/Applications"
+          version="$(node -p 'require("./src-tauri/tauri.conf.json").version')"
+          mkdir -p src-tauri/target/release/bundle/dmg
+          hdiutil create -volname "Doujin Game Radar" -srcfolder "$stage" -format UDZO -ov \
+            "src-tauri/target/release/bundle/dmg/DoujinGameRadar_${version}_$(uname -m).dmg"
+
+      - name: Verify macOS package
+        shell: bash
+        run: |
+          set -euo pipefail
+          app="src-tauri/target/release/bundle/macos/Doujin Game Radar.app"
+          codesign --verify --deep --strict --verbose=2 "$app"
+          codesign --verify --strict --verbose=2 "$app/Contents/MacOS/radar-pipeline"
+          dmg=(src-tauri/target/release/bundle/dmg/*.dmg)
+          test "${#dmg[@]}" -eq 1
+          hdiutil verify "${dmg[0]}"
 
       - name: Package zip
         run: |
@@ -117,6 +143,13 @@ jobs:
         with:
           name: doujin-game-radar-macos-app
           path: desktop/src-tauri/target/release/bundle/DoujinGameRadar-macos.zip
+          if-no-files-found: error
+
+      - name: Upload macOS installer artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: doujin-game-radar-macos-installer
+          path: desktop/src-tauri/target/release/bundle/dmg/*.dmg
           if-no-files-found: error
 
   release:
@@ -137,13 +170,14 @@ jobs:
           files: |
             dist-artifacts/doujin-game-radar-windows-installer/*.exe
             dist-artifacts/doujin-game-radar-macos-app/*.zip
+            dist-artifacts/doujin-game-radar-macos-installer/*.dmg
           name: "Doujin Game Radar ${{ github.ref_name }}"
           body: |
-            同人游戏雷达 · Doujin Game Radar —— 桌面版（Windows 安装包 / macOS 应用包）。
+            同人游戏雷达 · Doujin Game Radar —— 桌面版（Windows 安装包 / macOS 安装盘）。
 
             - Windows：NSIS `.exe` 安装包（Windows 10+，WebView2 由安装器处理）
-            - macOS：`.app` 压缩包，解压后拖入「应用程序」即可（未签名，首次打开如被拦截请右键→打开）
+            - macOS：优先下载 `.dmg`，打开后拖入「应用程序」。应用采用临时签名，但未获 Apple 公证；首次启动若被拦截，请在「系统设置 → 隐私与安全性」中允许打开。
             - 打包版内置数据管道，使用「更新数据」无需安装 Python（见仓库 README）
-            - Windows installer (NSIS) and macOS `.app` bundle for the local-first
+            - Windows installer (NSIS) and macOS `.dmg` disk image for the local-first
               DLsite doujin game browser. The packaged app includes the pipeline;
               Python is not required for in-app updates.
