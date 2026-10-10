@@ -442,8 +442,19 @@ def _run_chain(
         _append(log_file, f"===== {_timestamp()} {end_message.format(failed)} =====")
         return 0 if failed == 0 else 1
     except KeyboardInterrupt:
+        detail = "任务被中断；已保留上次成功数据，可重试"
+        write_state(state_file, "failed", detail, years_label)
+        if status_name:
+            write_task_progress(paths.out_dir / status_name, "failed", detail=detail, years=years_label)
         _append(log_file, f"===== {_timestamp()} 收到中断（锁已释放） =====")
         return 130
+    except Exception as exc:
+        detail = f"任务异常退出；详见 data/{log_name}，可重试"
+        _append(log_file, f"===== {_timestamp()} 异常退出：{exc!r} =====")
+        write_state(state_file, "failed", detail, years_label)
+        if status_name:
+            write_task_progress(paths.out_dir / status_name, "failed", detail=detail, years=years_label)
+        return 1
     finally:
         release_update_lock(paths, lock, intent, yielded)
 

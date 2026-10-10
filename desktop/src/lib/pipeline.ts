@@ -66,8 +66,21 @@ interface ProgressFiles {
 /** 运行中的阶段（与 macOS 版横幅一致）。 */
 export const ACTIVE_PHASES = new Set(["waiting", "init", "rankings", "sales", "images", "export", "import"]);
 
-export function isRunning(state: UpdateState | null | undefined): boolean {
-  return !!state && ACTIVE_PHASES.has(state.phase ?? "");
+/** 进度文件不是进程存活证明；异常退出时可能永远停留在活动阶段。 */
+export function isStaleActive(state: UpdateState | null | undefined, now = Date.now() / 1000): boolean {
+  if (!state || !ACTIVE_PHASES.has(state.phase ?? "")) return false;
+  const timeout = state.years === "quick" ? 3600 : 48 * 3600;
+  return typeof state.updated_ts !== "number" || !Number.isFinite(state.updated_ts)
+    || now - state.updated_ts > timeout;
+}
+
+export function isRunning(state: UpdateState | null | undefined, now = Date.now() / 1000): boolean {
+  return !!state && ACTIVE_PHASES.has(state.phase ?? "") && !isStaleActive(state, now);
+}
+
+export function staleUpdateSummary(state: UpdateState): string {
+  const scope = state.years ? `（${yearsLabel(state.years)}）` : "";
+  return `上次更新${scope}长时间没有进度，可能已中断；旧数据仍可浏览。可重新更新，若原任务仍在运行会自动跳过。`;
 }
 
 /** 进度时间戳是否已过期（对齐 macOS：update 48 小时、genre 6 小时）。 */

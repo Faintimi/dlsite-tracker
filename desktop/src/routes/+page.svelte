@@ -51,11 +51,13 @@
     importSummary,
     importSwitch,
     isRunning,
+    isStaleActive,
     isStale,
     readProgress,
     removeGenre,
     startGenreImport,
     startUpdate,
+    staleUpdateSummary,
     unwatchGenre,
     updateSummary,
     watchGenre,
@@ -324,6 +326,9 @@
     if (importInfo?.running) {
       const text = importSummary(importInfo);
       if (text) return { icon: ICONS.refresh, text };
+    }
+    if (progress && isStaleActive(progress)) {
+      return { icon: ICONS.warn, text: staleUpdateSummary(progress), warning: true };
     }
     // 每日调度的结果独立持久化：手动快更写入 update-progress 后，也不能掩盖夜间失败。
     if (dailyStatus?.phase === "failed") {

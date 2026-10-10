@@ -206,6 +206,17 @@ class RunStepTests(unittest.TestCase):
 
 
 class DailyChainTests(unittest.TestCase):
+    def test_daily_exception_updates_persistent_status(self) -> None:
+        def crashed(*_args) -> int:
+            raise OSError("child launch failed")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = _paths(tmp)
+            self.assertEqual(jobs.run_daily(paths, runner=crashed), 1)
+            status = json.loads((paths.out_dir / "daily-status.json").read_text(encoding="utf-8"))
+            self.assertEqual(status["phase"], "failed")
+            self.assertIn("异常退出", status["detail"])
+
     def test_daily_failure_reasons(self) -> None:
         reset = jobs._daily_failure_detail([("rankings", "Connection reset by peer")])
         self.assertIn("连接 DLsite 中断", reset)
@@ -327,6 +338,29 @@ class DailyChainTests(unittest.TestCase):
 
 
 class QuickChainTests(unittest.TestCase):
+    def test_interrupted_quick_records_terminal_failure(self) -> None:
+        def interrupted(*_args) -> int:
+            raise KeyboardInterrupt
+
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = _paths(tmp)
+            self.assertEqual(jobs.run_quick(paths, runner=interrupted), 130)
+            state = json.loads((paths.out_dir / "update-progress.json").read_text(encoding="utf-8"))
+            self.assertEqual(state["phase"], "failed")
+            self.assertIn("被中断", state["detail"])
+
+    def test_crashed_quick_records_terminal_failure(self) -> None:
+        def crashed(*_args) -> int:
+            raise OSError("process launch failed")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = _paths(tmp)
+            self.assertEqual(jobs.run_quick(paths, runner=crashed), 1)
+            state = json.loads((paths.out_dir / "update-progress.json").read_text(encoding="utf-8"))
+            self.assertEqual(state["phase"], "failed")
+            self.assertIn("异常退出", state["detail"])
+            self.assertIn("process launch failed", (paths.data_dir / "quick-update.log").read_text(encoding="utf-8"))
+
     def test_quick_steps_and_skip_genre(self) -> None:
         calls: list = []
 
