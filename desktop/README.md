@@ -12,6 +12,24 @@ DLsite 提供作品信息与购买入口；雷达把公开商品数据组织成�
 - **macOS**：从 GitHub Release 页下载 `.dmg` 安装盘，打开后把应用拖入「应用程序」。目前采用临时签名，未获 Apple 公证；首次启动若被拦截，在「系统设置 → 隐私与安全性」中选择仍要打开。Actions Artifact 是构建产物 ZIP，不是直接打开的安装盘
 - **自行构建**：在仓库根执行 `bash scripts/build-sidecar.sh`（生成内嵌管道），再进入 `desktop` 执行 `npm install && npm run tauri build`（依赖见下表）
 
+### macOS 首次打开
+
+当前 macOS 测试包有临时签名，但**未经 Apple 公证**。从浏览器下载后出现「Apple 无法验证」提示是预期限制，不代表 Apple 已确认它安全。默认做法：先尝试打开「应用程序」中的 Doujin Game Radar，再到「系统设置 → 隐私与安全性」点「仍要打开」，最后在确认框点「打开」。请仅在确认下载自本项目 [Release](https://github.com/Faintimi/dlsite-tracker/releases) 时操作；若提示「将损坏你的电脑」或检测到恶意软件，不要放行。
+
+熟悉终端的用户可以选择以下**手动备选**。先运行 `shasum`，将输出与 Release 页面显示的该 DMG 的 SHA-256 逐字核对；只有完全一致、且已从 DMG 将应用拖入「应用程序」时，才运行第二组命令。`codesign` 只检查包内签名是否完整，**不能证明开发者身份或替代 Apple 公证**；`xattr` 会只为这一个应用移除下载隔离标记，绕过 Gatekeeper 的首次检查。不要对其他文件或整个「应用程序」目录运行它，也不要加 `sudo`。
+
+```bash
+shasum -a 256 "/path/to/DoujinGameRadar_<version>_arm64.dmg"
+```
+
+```bash
+codesign --verify --deep --strict --verbose=2 "/Applications/Doujin Game Radar.app" && \
+xattr -dr com.apple.quarantine "/Applications/Doujin Game Radar.app" && \
+open "/Applications/Doujin Game Radar.app"
+```
+
+若任何一步失败，请停止并反馈原始错误；不要跳过校验继续运行。图形界面的「仍要打开」步骤见 [Apple 官方说明](https://support.apple.com/zh-cn/102445)。
+
 ## 功能
 
 - 浏览本机已导入作品：虚拟滚动网格 / 封面墙 / 底部信息栏 / 紧凑列表 / 横条（五种视图）

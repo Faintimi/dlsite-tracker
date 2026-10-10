@@ -30,7 +30,7 @@ The bundled pipeline fetches public product metadata from DLsite pages and APIs,
 
 ## Try the desktop app first
 
-Packaged Windows / macOS builds include the pipeline: **no Python or repository clone is needed at runtime**. Download your platform's installer from [Releases](https://github.com/Faintimi/dlsite-tracker/releases) (`.exe` on Windows, `.dmg` on macOS), then choose “初始化数据” (Initialize data) on first launch. Imported works appear progressively and their covers follow. [Actions artifacts](https://github.com/Faintimi/dlsite-tracker/actions/workflows/desktop-release.yml) add an outer ZIP and should not be opened as installers directly. The feature overview above describes the current source tree; see each release's notes for what a published installer includes. See the [desktop guide](desktop/README_EN.md) for details.
+Packaged Windows / macOS builds include the pipeline: **no Python or repository clone is needed at runtime**. Download your platform's installer from [Releases](https://github.com/Faintimi/dlsite-tracker/releases) (`.exe` on Windows, `.dmg` on macOS), then choose “初始化数据” (Initialize data) on first launch. Imported works appear progressively and their covers follow. **The macOS test build is not Apple-notarized and may require a first-launch override**; see the [desktop guide](desktop/README_EN.md#first-launch-on-macos) for graphical and optional manual terminal steps. [Actions artifacts](https://github.com/Faintimi/dlsite-tracker/actions/workflows/desktop-release.yml) add an outer ZIP and should not be opened as installers directly. The feature overview above describes the current source tree; see each release's notes for what a published installer includes.
 
 ## Command line / developer quick start
 

@@ -12,6 +12,24 @@ DLsite remains the source for product information and purchases. Radar organizes
 - **macOS**: download the `.dmg` from Releases, open it, and drag the app to Applications. The app is ad-hoc signed but not Apple-notarized; if macOS blocks the first launch, allow it in System Settings → Privacy & Security. An Actions artifact has an additional ZIP wrapper and is not itself an installer
 - **Build it yourself**: run `bash scripts/build-sidecar.sh` at the repository root first (builds the embedded pipeline), then `npm install && npm run tauri build` from `desktop` (requirements below)
 
+### First launch on macOS
+
+The current macOS test build is ad-hoc signed but **not Apple-notarized**. A browser download may trigger an “Apple cannot verify” warning; this does not mean Apple has established that the app is safe. By default, try opening Doujin Game Radar from Applications, then go to System Settings → Privacy & Security → Open Anyway, and confirm Open. Do this only if you obtained the app from this project's [Releases](https://github.com/Faintimi/dlsite-tracker/releases). Do not override a warning that the app will damage your computer or that malware was detected.
+
+Experienced terminal users may choose this **manual alternative**. First run `shasum` and compare its output character-for-character with the SHA-256 shown for that DMG on the Release page. Only if they match, and after dragging the app from the DMG into Applications, run the second group of commands. `codesign` checks bundle integrity only; it does **not** authenticate the publisher or replace Apple notarization. `xattr` then removes the download quarantine flag only from this app, bypassing Gatekeeper's first-launch check. Do not target other files or the entire Applications folder, and do not add `sudo`.
+
+```bash
+shasum -a 256 "/path/to/DoujinGameRadar_<version>_arm64.dmg"
+```
+
+```bash
+codesign --verify --deep --strict --verbose=2 "/Applications/Doujin Game Radar.app" && \
+xattr -dr com.apple.quarantine "/Applications/Doujin Game Radar.app" && \
+open "/Applications/Doujin Game Radar.app"
+```
+
+If any step fails, stop and report the exact error instead of skipping the check. See [Apple's instructions](https://support.apple.com/en-us/102445) for the graphical Open Anyway path.
+
 ## Features
 
 - Browse works imported into your local library: virtualized grid / cover wall / bottom info bar / compact list / strip (five view modes)
